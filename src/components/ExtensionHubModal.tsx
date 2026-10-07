@@ -14,18 +14,40 @@ import {
   Command, 
   ShieldCheck,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  Keyboard
 } from 'lucide-react';
 import { ReaderSettings } from '../types';
 import { THEME_CONFIGS, HIGHLIGHT_COLORS } from '../utils/themeStyles';
 import { downloadExtensionPackage } from '../utils/extensionPacker';
 import { isChromeExtensionEnvironment, captureActiveTabText } from '../utils/extensionBridge';
 
+const KEYBOARD_SHORTCUTS = [
+  { key: 'Space', desc: 'Play / Pause reader (or resume after Smart Auto-Pause)' },
+  { key: 'Ctrl/Cmd + O', desc: 'Open Universal Text Input Hub' },
+  { key: 'Ctrl/Cmd + V', desc: 'Paste / Import clipboard text or URL' },
+  { key: '← Left Arrow', desc: 'Rewind 10 words' },
+  { key: '→ Right Arrow', desc: 'Jump forward 10 words' },
+  { key: '↑ Up Arrow', desc: 'Increase reading speed (+25 WPM)' },
+  { key: '↓ Down Arrow', desc: 'Decrease reading speed (-25 WPM)' },
+  { key: 'R', desc: 'Restart reading from the beginning' },
+  { key: 'F', desc: 'Toggle Fullscreen distraction-free mode' },
+  { key: 'M', desc: 'Switch between RSVP and Full Text Flow mode' },
+  { key: 'O', desc: 'Open Document Overview, Contents & Minimap' },
+  { key: 'T', desc: 'Open Focus Reading Timer' },
+  { key: 'A', desc: 'Open Reading Statistics & Analytics (WPM over time)' },
+  { key: 'D', desc: 'Toggle Dark / Light Theme mode' },
+  { key: 'S', desc: 'Toggle Metronome focus sound' },
+  { key: 'V', desc: 'Toggle Voice-Over Narration (Web Speech API)' },
+  { key: 'Esc', desc: 'Close modals / Exit Fullscreen' },
+];
+
 interface ExtensionHubModalProps {
   isOpen: boolean;
   onClose: () => void;
   onApplyCapturedText: (text: string, title?: string) => void;
   settings: ReaderSettings;
+  initialTab?: 'shortcuts' | 'simulator' | 'install' | 'files';
 }
 
 export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
@@ -33,12 +55,19 @@ export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
   onClose,
   onApplyCapturedText,
   settings,
+  initialTab = 'shortcuts',
 }) => {
-  const [activeTab, setActiveTab] = useState<'simulator' | 'install' | 'files'>('simulator');
+  const [activeTab, setActiveTab] = useState<'shortcuts' | 'simulator' | 'install' | 'files'>(initialTab);
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadDone, setDownloadDone] = useState(false);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [selectedFileType, setSelectedFileType] = useState<'manifest' | 'contentJs' | 'contentCss' | 'background'>('contentJs');
+
+  useEffect(() => {
+    if (isOpen && initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [isOpen, initialTab]);
 
   // Simulator State
   const [simulatedSelection, setSimulatedSelection] = useState<string>('');
@@ -151,7 +180,7 @@ export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <h3 className={`text-base sm:text-lg font-bold ${theme.textPrimary}`}>
-                  Chrome Extension (Manifest V3)
+                  Web Capture, Extension & Shortcuts
                 </h3>
                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
                   <ShieldCheck className="w-3 h-3" />
@@ -159,7 +188,7 @@ export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
                 </span>
               </div>
               <p className={`text-xs ${theme.textMuted}`}>
-                Capture highlighted text from any website and read with RSVP & middle focus
+                Hands-free keyboard controls, web highlight capture & Chrome extension tools
               </p>
             </div>
           </div>
@@ -189,26 +218,40 @@ export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
         </div>
 
         {/* Tab Strip */}
-        <div className={`flex items-center px-5 sm:px-6 pt-3 border-b ${theme.borderClass} gap-4`}>
+        <div className={`flex items-center px-5 sm:px-6 pt-3 border-b ${theme.borderClass} gap-4 overflow-x-auto`}>
+          <button
+            id="tab-shortcuts-btn"
+            type="button"
+            onClick={() => setActiveTab('shortcuts')}
+            className={`pb-3 text-xs sm:text-sm font-semibold transition-all border-b-2 flex items-center gap-1.5 shrink-0 ${
+              activeTab === 'shortcuts'
+                ? 'border-red-500 text-red-500'
+                : `border-transparent ${theme.textMuted} hover:${theme.textPrimary}`
+            }`}
+          >
+            <Keyboard className="w-4 h-4" />
+            <span>Keyboard Shortcuts</span>
+          </button>
+
           <button
             id="tab-sim-btn"
             type="button"
             onClick={() => setActiveTab('simulator')}
-            className={`pb-3 text-xs sm:text-sm font-semibold transition-all border-b-2 flex items-center gap-1.5 ${
+            className={`pb-3 text-xs sm:text-sm font-semibold transition-all border-b-2 flex items-center gap-1.5 shrink-0 ${
               activeTab === 'simulator'
                 ? 'border-red-500 text-red-500'
                 : `border-transparent ${theme.textMuted} hover:${theme.textPrimary}`
             }`}
           >
             <MousePointer className="w-4 h-4" />
-            <span>Interactive Content Script Simulator</span>
+            <span>Web Capture Simulator</span>
           </button>
 
           <button
             id="tab-guide-btn"
             type="button"
             onClick={() => setActiveTab('install')}
-            className={`pb-3 text-xs sm:text-sm font-semibold transition-all border-b-2 flex items-center gap-1.5 ${
+            className={`pb-3 text-xs sm:text-sm font-semibold transition-all border-b-2 flex items-center gap-1.5 shrink-0 ${
               activeTab === 'install'
                 ? 'border-red-500 text-red-500'
                 : `border-transparent ${theme.textMuted} hover:${theme.textPrimary}`
@@ -222,7 +265,7 @@ export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
             id="tab-code-btn"
             type="button"
             onClick={() => setActiveTab('files')}
-            className={`pb-3 text-xs sm:text-sm font-semibold transition-all border-b-2 flex items-center gap-1.5 ${
+            className={`pb-3 text-xs sm:text-sm font-semibold transition-all border-b-2 flex items-center gap-1.5 shrink-0 ${
               activeTab === 'files'
                 ? 'border-red-500 text-red-500'
                 : `border-transparent ${theme.textMuted} hover:${theme.textPrimary}`
@@ -235,6 +278,41 @@ export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
 
         {/* Modal Body */}
         <div className="p-5 sm:p-6 overflow-y-auto flex-1 space-y-4">
+          {/* TAB 0: KEYBOARD SHORTCUTS */}
+          {activeTab === 'shortcuts' && (
+            <div className="space-y-4 animate-in fade-in duration-150">
+              <div className={`p-3.5 rounded-xl border ${theme.borderClass} ${theme.accentSurface} flex items-start gap-3 text-xs`}>
+                <Keyboard className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <p className={`font-semibold ${theme.textPrimary}`}>
+                    Hands-free Reading Controls
+                  </p>
+                  <p className={theme.textMuted}>
+                    Use these key bindings to navigate documents, adjust pacing, and switch modes without reaching for the mouse. Press <kbd className="px-1.5 py-0.5 text-[10px] font-mono rounded border bg-black/40 text-red-400 border-white/10 font-bold">?</kbd> at any time to open this menu.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                {KEYBOARD_SHORTCUTS.map((sc, i) => (
+                  <div 
+                    key={`sc-${sc.key}-${i}`}
+                    className={`flex items-center justify-between p-2.5 rounded-xl border ${theme.borderClass} ${theme.inputBg}`}
+                  >
+                    <span className={`text-xs font-medium ${theme.textPrimary}`}>
+                      {sc.desc}
+                    </span>
+                    <kbd 
+                      className="px-2.5 py-1 text-xs font-mono font-bold rounded-lg border bg-black/30 text-red-400 border-white/10 shadow-xs shrink-0 ml-2"
+                    >
+                      {sc.key}
+                    </kbd>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* TAB 1: CONTENT SCRIPT SIMULATOR */}
           {activeTab === 'simulator' && (
             <div className="space-y-4">

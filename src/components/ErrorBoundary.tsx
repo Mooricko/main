@@ -58,7 +58,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
 
             <div className="space-y-2">
               <h2 className="text-xl font-semibold text-slate-100 tracking-tight">
-                ADHD Reader Recovered
+                Khoroos Reader Recovered
               </h2>
               <p className="text-sm text-slate-400 leading-relaxed">
                 A temporary display or state glitch occurred. Your reader has been safely paused to prevent loss of focus.

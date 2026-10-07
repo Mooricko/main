@@ -289,6 +289,7 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const [isExtensionHubOpen, setIsExtensionHubOpen] = useState(false);
+  const [extensionHubInitialTab, setExtensionHubInitialTab] = useState<'shortcuts' | 'simulator' | 'install' | 'files'>('shortcuts');
   const [isTimerModalOpen, setIsTimerModalOpen] = useState(false);
   const [isStatsModalOpen, setIsStatsModalOpen] = useState(false);
   const [toastNotification, setToastNotification] = useState<string | null>(null);
@@ -1039,6 +1040,10 @@ export default function App() {
         setIsOverviewOpen((prev) => !prev);
       } else if (e.key === 'd' || e.key === 'D') {
         handleUpdateSettings({ theme: settings.theme === 'light' ? 'midnight' : 'light' });
+      } else if (e.key === '?' || (e.key === '/' && !e.ctrlKey && !e.metaKey)) {
+        e.preventDefault();
+        setExtensionHubInitialTab('shortcuts');
+        setIsExtensionHubOpen((prev) => !prev);
       } else if (e.code === 'Escape') {
         setIsTextInputOpen(false);
         setIsOverviewOpen(false);
@@ -1149,8 +1154,14 @@ export default function App() {
           onOpenTextInput={() => setIsTextInputOpen(true)}
           onOpenOverview={() => setIsOverviewOpen(true)}
           onOpenSettings={() => setIsSettingsOpen(true)}
-          onOpenShortcuts={() => setIsShortcutsOpen(true)}
-          onOpenExtensionHub={() => setIsExtensionHubOpen(true)}
+          onOpenShortcuts={() => {
+            setExtensionHubInitialTab('shortcuts');
+            setIsExtensionHubOpen(true);
+          }}
+          onOpenExtensionHub={() => {
+            setExtensionHubInitialTab('simulator');
+            setIsExtensionHubOpen(true);
+          }}
           isFullscreen={isFullscreen}
           onToggleFullscreen={handleToggleFullscreen}
           currentTitle={currentTitle}
@@ -1274,9 +1285,10 @@ export default function App() {
         onClose={() => setIsExtensionHubOpen(false)}
         onApplyCapturedText={(text, title) => {
           handleApplyText(text, title || 'Captured Webpage Selection');
-          showToast(`⚡ Captured text loaded into ADHD Reader!`);
+          showToast(`⚡ Captured text loaded into Khoroos Reader!`);
         }}
         settings={settings}
+        initialTab={extensionHubInitialTab}
       />
 
       <SettingsDrawer
@@ -1336,7 +1348,7 @@ export default function App() {
             <div className="w-16 h-16 rounded-2xl bg-red-500 text-white flex items-center justify-center mx-auto mb-4 shadow-lg shadow-red-500/30">
               <Upload className="w-8 h-8" />
             </div>
-            <h2 className="text-xl font-bold text-white mb-2">Drop to Import into ADHD Reader</h2>
+            <h2 className="text-xl font-bold text-white mb-2">Drop to Import into Khoroos Reader</h2>
             <p className="text-sm text-slate-300 mb-4">
               Release your TXT, Markdown, or PDF document to start reading immediately
             </p>

@@ -16,10 +16,12 @@ import {
   Timer,
   BellOff,
   Activity,
-  Layers
+  Layers,
+  Keyboard
 } from 'lucide-react';
 import { ReaderSettings, ReaderViewMode } from '../types';
 import { THEME_CONFIGS, HIGHLIGHT_COLORS } from '../utils/themeStyles';
+import { KhoroosLogo } from './KhoroosLogo';
 
 interface HeaderProps {
   settings: ReaderSettings;
@@ -68,63 +70,30 @@ export const Header: React.FC<HeaderProps> = ({
   return (
     <header
       id="app-header"
-      className={`w-full border-b ${theme.borderClass} ${theme.cardBgClass} px-4 py-3 sm:px-6 transition-all duration-700 ease-out z-30 shrink-0 ${
+      className={`w-full border-b ${theme.borderClass} ${theme.cardBgClass} transition-all duration-700 ease-out z-30 shrink-0 ${
         isIdle ? 'opacity-0 -translate-y-4 pointer-events-none' : 'opacity-100 translate-y-0'
       }`}
     >
-      <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
+      <div className="max-w-7xl mx-auto px-4 py-2.5 sm:px-6 flex items-center justify-between gap-3">
         {/* Brand & Document Name */}
         <div className="flex items-center gap-3 min-w-0">
           <div 
-            className="flex items-center justify-center w-9 h-9 rounded-xl bg-red-500/10 border border-red-500/30 text-red-500 shrink-0 font-bold text-base shadow-xs"
-            title="ADHD Reader"
+            className="flex items-center justify-center w-9 h-9 rounded-xl bg-white border border-slate-700/40 text-black shrink-0 shadow-sm overflow-hidden p-1 transition-transform hover:scale-105"
+            title="Khoroos Reader"
           >
-            <span>re<span className="text-red-500">ad</span></span>
+            <KhoroosLogo className="w-full h-full text-black" />
           </div>
 
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <h1 className={`text-base sm:text-lg font-bold tracking-tight ${theme.textPrimary} truncate`}>
-                ADHD Reader
+                Khoroos Reader
               </h1>
-              <span className="hidden md:inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-red-500/10 text-red-500 border border-red-500/20">
-                RSVP + Middle Focus
-              </span>
             </div>
             <p className={`text-xs ${theme.textMuted} truncate max-w-[200px] sm:max-w-xs md:max-w-md`}>
               {currentTitle}
             </p>
           </div>
-        </div>
-
-        {/* Center / Mode Switcher */}
-        <div className="hidden sm:flex items-center p-1 rounded-xl bg-black/20 border border-white/5">
-          <button
-            id="view-mode-rsvp-btn"
-            type="button"
-            onClick={() => onToggleViewMode('rsvp')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-              viewMode === 'rsvp'
-                ? `${highlight.bgBadge} border shadow-xs`
-                : `${theme.textMuted} hover:${theme.textPrimary}`
-            }`}
-          >
-            <Eye className="w-3.5 h-3.5" />
-            <span>Word by Word (RSVP)</span>
-          </button>
-          <button
-            id="view-mode-flow-btn"
-            type="button"
-            onClick={() => onToggleViewMode('flow')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-              viewMode === 'flow'
-                ? `${highlight.bgBadge} border shadow-xs`
-                : `${theme.textMuted} hover:${theme.textPrimary}`
-            }`}
-          >
-            <AlignLeft className="w-3.5 h-3.5" />
-            <span>Full Text Flow</span>
-          </button>
         </div>
 
         {/* Action Controls */}
@@ -205,17 +174,21 @@ export const Header: React.FC<HeaderProps> = ({
             )}
           </button>
 
-          {/* Chrome Extension & Webpage Capture Hub */}
+          {/* Merged Web Capture, Extension & Shortcuts Button */}
           <button
             id="open-extension-hub-btn"
             type="button"
             onClick={onOpenExtensionHub}
-            title="Chrome Extension & Web Selection Capture (Manifest V3)"
+            title="Web Capture, Chrome Extension & Keyboard Shortcuts (?)"
+            aria-label="Web Capture & Keyboard Shortcuts"
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-500/30 bg-red-500/10 hover:bg-red-500/20 text-red-500 transition-colors text-xs font-semibold shadow-xs"
           >
-            <Puzzle className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Web Capture & Extension</span>
-            <span className="sm:hidden">Extension</span>
+            <div className="flex items-center gap-1">
+              <Puzzle className="w-3.5 h-3.5" />
+              <Keyboard className="w-3 h-3 opacity-70" />
+            </div>
+            <span className="hidden sm:inline">Capture & Shortcuts</span>
+            <span className="sm:hidden">Tools</span>
           </button>
 
           {/* Change Text / Library Button */}
@@ -241,18 +214,6 @@ export const Header: React.FC<HeaderProps> = ({
             <Settings className="w-4 h-4" />
           </button>
 
-          {/* Shortcuts Info Button */}
-          <button
-            id="open-shortcuts-btn"
-            type="button"
-            onClick={onOpenShortcuts}
-            title="Keyboard Shortcuts"
-            aria-label="Keyboard Shortcuts"
-            className={`hidden sm:flex p-2 rounded-lg border ${theme.borderClass} ${theme.textMuted} hover:${theme.textPrimary} hover:${theme.accentSurface} transition-colors`}
-          >
-            <HelpCircle className="w-4 h-4" />
-          </button>
-
           {/* Fullscreen Mode Button */}
           <button
             id="toggle-fullscreen-btn"
@@ -263,6 +224,41 @@ export const Header: React.FC<HeaderProps> = ({
             className={`p-2 rounded-lg border ${theme.borderClass} ${theme.textMuted} hover:${theme.textPrimary} hover:${theme.accentSurface} transition-colors`}
           >
             {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+          </button>
+        </div>
+      </div>
+
+      {/* Mode Switcher Under Header */}
+      <div 
+        id="mode-switcher-bar"
+        className={`w-full border-t ${theme.borderClass} bg-black/10 py-1.5 px-4 flex items-center justify-center`}
+      >
+        <div className="flex items-center p-1 rounded-xl bg-black/20 border border-white/5 shadow-xs">
+          <button
+            id="view-mode-rsvp-btn"
+            type="button"
+            onClick={() => onToggleViewMode('rsvp')}
+            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+              viewMode === 'rsvp'
+                ? `${highlight.bgBadge} border shadow-xs`
+                : `${theme.textMuted} hover:${theme.textPrimary}`
+            }`}
+          >
+            <Eye className="w-3.5 h-3.5" />
+            <span>Word by Word (RSVP)</span>
+          </button>
+          <button
+            id="view-mode-flow-btn"
+            type="button"
+            onClick={() => onToggleViewMode('flow')}
+            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+              viewMode === 'flow'
+                ? `${highlight.bgBadge} border shadow-xs`
+                : `${theme.textMuted} hover:${theme.textPrimary}`
+            }`}
+          >
+            <AlignLeft className="w-3.5 h-3.5" />
+            <span>Full Text Flow</span>
           </button>
         </div>
       </div>
