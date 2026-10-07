@@ -2,7 +2,6 @@ import React from 'react';
 import { 
   BookOpen, 
   Settings, 
-  FileText, 
   Maximize2, 
   Minimize2, 
   Sparkles, 
@@ -16,7 +15,6 @@ import {
   Timer,
   BellOff,
   Activity,
-  Layers,
   Keyboard
 } from 'lucide-react';
 import { ReaderSettings, ReaderViewMode } from '../types';
@@ -28,8 +26,9 @@ interface HeaderProps {
   onUpdateSettings: (updater: Partial<ReaderSettings>) => void;
   viewMode: ReaderViewMode;
   onToggleViewMode: (mode: ReaderViewMode) => void;
-  onOpenTextInput: () => void;
+  onOpenTextInput?: () => void;
   onOpenOverview?: () => void;
+  onOpenSidebar?: () => void;
   onOpenSettings: () => void;
   onOpenShortcuts: () => void;
   onOpenExtensionHub: () => void;
@@ -51,6 +50,7 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleViewMode,
   onOpenTextInput,
   onOpenOverview,
+  onOpenSidebar,
   onOpenSettings,
   onOpenShortcuts,
   onOpenExtensionHub,
@@ -98,22 +98,6 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Action Controls */}
         <div className="flex items-center gap-1.5 sm:gap-2">
-          {/* Document Overview, Contents & Map Button */}
-          {onOpenOverview && (
-            <button
-              id="open-document-overview-btn"
-              type="button"
-              onClick={onOpenOverview}
-              title="Document Overview, Map & Contents (O)"
-              aria-label="Document Overview & Contents"
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold ${theme.borderClass} ${theme.textMuted} hover:${theme.textPrimary} hover:${theme.accentSurface} transition-all shadow-xs`}
-            >
-              <Layers className="w-3.5 h-3.5 text-red-400" />
-              <span className="hidden lg:inline">Overview & Contents</span>
-              <span className="lg:hidden hidden sm:inline">Overview</span>
-            </button>
-          )}
-
           {/* Reading Statistics & Analytics Button */}
           {onOpenStatsModal && (
             <button
@@ -189,17 +173,6 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
             <span className="hidden sm:inline">Capture & Shortcuts</span>
             <span className="sm:hidden">Tools</span>
-          </button>
-
-          {/* Change Text / Library Button */}
-          <button
-            id="open-text-input-btn"
-            type="button"
-            onClick={onOpenTextInput}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border ${theme.borderClass} ${theme.textPrimary} hover:${theme.accentSurface} transition-colors text-xs font-medium`}
-          >
-            <FileText className="w-4 h-4 text-red-500" />
-            <span className="hidden xs:inline">Select Text</span>
           </button>
 
           {/* Settings Drawer Button */}

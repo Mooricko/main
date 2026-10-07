@@ -30,13 +30,12 @@ import {
 import { Header } from './components/Header';
 import { RSVPReader } from './components/RSVPReader';
 import { FlowReader } from './components/FlowReader';
-import { TextInputModal } from './components/TextInputModal';
+import { DocumentSidebar } from './components/DocumentSidebar';
 import { SettingsDrawer } from './components/SettingsDrawer';
 import { KeyboardShortcutsModal } from './components/KeyboardShortcutsModal';
 import { ExtensionHubModal } from './components/ExtensionHubModal';
 import { FocusTimerModal } from './components/FocusTimerModal';
 import { ReadingStatsModal } from './components/ReadingStatsModal';
-import { DocumentOverviewModal } from './components/DocumentOverviewModal';
 import { classifyDocumentSize } from './services/structure/documentSizeClassifier';
 import { safeStorage } from './utils/safeStorage';
 import { 
@@ -284,8 +283,8 @@ export default function App() {
   }, [settings]);
 
   // 4. Modals and drawers
-  const [isTextInputOpen, setIsTextInputOpen] = useState(false);
-  const [isOverviewOpen, setIsOverviewOpen] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [sidebarActiveTab, setSidebarActiveTab] = useState<'overview' | 'input'>('overview');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const [isExtensionHubOpen, setIsExtensionHubOpen] = useState(false);
@@ -489,7 +488,8 @@ export default function App() {
         if (!droppedInsideDropZone) {
           setPendingDroppedFile(files[0]);
         }
-        setIsTextInputOpen(true);
+        setSidebarActiveTab('input');
+        setIsSidebarOpen(true);
       }
     };
 
@@ -680,7 +680,8 @@ export default function App() {
         });
 
         if (sizeClassification.isLargeOrAbove) {
-          setIsOverviewOpen(true);
+          setSidebarActiveTab('overview');
+          setIsSidebarOpen(true);
         }
 
         // 3. Update lightweight saved docs in React state and localStorage
@@ -996,13 +997,15 @@ export default function App() {
       // Universal Input Hub Shortcuts
       if ((e.ctrlKey || e.metaKey) && (e.key === 'o' || e.key === 'O')) {
         e.preventDefault();
-        setIsTextInputOpen(true);
+        setSidebarActiveTab('input');
+        setIsSidebarOpen(true);
         return;
       }
 
       if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
         e.preventDefault();
-        setIsTextInputOpen(true);
+        setSidebarActiveTab('input');
+        setIsSidebarOpen(true);
         return;
       }
 
@@ -1037,7 +1040,8 @@ export default function App() {
       } else if (e.key === 'a' || e.key === 'A') {
         setIsStatsModalOpen((prev) => !prev);
       } else if (e.key === 'o' || e.key === 'O') {
-        setIsOverviewOpen((prev) => !prev);
+        setSidebarActiveTab('overview');
+        setIsSidebarOpen((prev) => !prev);
       } else if (e.key === 'd' || e.key === 'D') {
         handleUpdateSettings({ theme: settings.theme === 'light' ? 'midnight' : 'light' });
       } else if (e.key === '?' || (e.key === '/' && !e.ctrlKey && !e.metaKey)) {
@@ -1045,8 +1049,7 @@ export default function App() {
         setExtensionHubInitialTab('shortcuts');
         setIsExtensionHubOpen((prev) => !prev);
       } else if (e.code === 'Escape') {
-        setIsTextInputOpen(false);
-        setIsOverviewOpen(false);
+        setIsSidebarOpen(false);
         setIsSettingsOpen(false);
         setIsShortcutsOpen(false);
         setIsExtensionHubOpen(false);
@@ -1074,7 +1077,7 @@ export default function App() {
   const [isIdle, setIsIdle] = useState(false);
   const idleTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  const isAnyModalOpen = isTextInputOpen || isOverviewOpen || isSettingsOpen || isShortcutsOpen || isExtensionHubOpen || isTimerModalOpen || isStatsModalOpen;
+  const isAnyModalOpen = isSidebarOpen || isSettingsOpen || isShortcutsOpen || isExtensionHubOpen || isTimerModalOpen || isStatsModalOpen;
 
   const resetIdleTimer = useCallback(() => {
     setIsIdle(false);
@@ -1151,8 +1154,10 @@ export default function App() {
           onUpdateSettings={handleUpdateSettings}
           viewMode={viewMode}
           onToggleViewMode={setViewMode}
-          onOpenTextInput={() => setIsTextInputOpen(true)}
-          onOpenOverview={() => setIsOverviewOpen(true)}
+          onOpenSidebar={() => {
+            setSidebarActiveTab('overview');
+            setIsSidebarOpen(true);
+          }}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onOpenShortcuts={() => {
             setExtensionHubInitialTab('shortcuts');
@@ -1248,10 +1253,16 @@ export default function App() {
       )}
 
       {/* Modals & Drawers */}
-      {/* Phase 6: Large Document Overview & Navigation Modal */}
-      <DocumentOverviewModal
-        isOpen={isOverviewOpen}
-        onClose={() => setIsOverviewOpen(false)}
+      {/* Left Sidebar: Merged Content & Overview + Universal Text Input Hub */}
+      <DocumentSidebar
+        isOpen={isSidebarOpen}
+        onClose={() => setIsSidebarOpen(false)}
+        onOpen={(tab) => {
+          if (tab) setSidebarActiveTab(tab);
+          setIsSidebarOpen(true);
+        }}
+        activeTab={sidebarActiveTab}
+        onTabChange={setSidebarActiveTab}
         documentId={activeDocId}
         handle={activeDocumentHandle}
         metadata={activeMetadata}
@@ -1259,25 +1270,20 @@ export default function App() {
         currentWordIndex={currentIndex}
         onNavigateToPosition={handleNavigateToPosition}
         onStartFromBeginning={handleStartFromBeginning}
-        settings={settings}
-      />
-
-      <TextInputModal
-        isOpen={isTextInputOpen}
-        onClose={() => setIsTextInputOpen(false)}
+        currentText=""
         currentTitle={currentTitle}
         onApplyText={handleApplyText}
         onImportDocument={handleImportDocument}
         savedDocuments={savedDocs}
-        onSaveDocument={(doc) => setSavedDocs((prev) => [doc, ...prev])}
         onDeleteDocument={handleDeleteDocument}
         onOpenExtensionHub={() => {
-          setIsTextInputOpen(false);
+          setIsSidebarOpen(false);
           setIsExtensionHubOpen(true);
         }}
-        settings={settings}
         initialDroppedFile={pendingDroppedFile}
         onClearDroppedFile={() => setPendingDroppedFile(null)}
+        settings={settings}
+        isIdle={isIdle}
       />
 
       <ExtensionHubModal
@@ -1338,7 +1344,7 @@ export default function App() {
       />
 
       {/* Global Drag & Drop Overlay */}
-      {isWindowDragging && !isTextInputOpen && (
+      {isWindowDragging && !isSidebarOpen && (
         <div 
           id="window-drag-overlay"
           onClick={clearWindowDrag}

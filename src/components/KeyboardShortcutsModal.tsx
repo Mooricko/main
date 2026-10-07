@@ -21,7 +21,7 @@ export const KeyboardShortcutsModal: React.FC<KeyboardShortcutsModalProps> = ({
 
   const shortcuts = [
     { key: 'Space', desc: 'Play / Pause reader (or resume after Smart Auto-Pause)' },
-    { key: 'Ctrl/Cmd + O', desc: 'Open Universal Text Input Hub' },
+    { key: 'Ctrl/Cmd + O', desc: 'Open Sidebar: Text Input & Library Hub' },
     { key: 'Ctrl/Cmd + V', desc: 'Paste / Import clipboard text or URL' },
     { key: '← Left Arrow', desc: 'Rewind 10 words' },
     { key: '→ Right Arrow', desc: 'Jump forward 10 words' },
@@ -30,7 +30,7 @@ export const KeyboardShortcutsModal: React.FC<KeyboardShortcutsModalProps> = ({
     { key: 'R', desc: 'Restart reading from the beginning' },
     { key: 'F', desc: 'Toggle Fullscreen distraction-free mode' },
     { key: 'M', desc: 'Switch between RSVP and Full Text Flow mode' },
-    { key: 'O', desc: 'Open Document Overview, Contents & Minimap' },
+    { key: 'O', desc: 'Toggle Sidebar: Document Overview & Contents' },
     { key: 'T', desc: 'Open Focus Reading Timer' },
     { key: 'A', desc: 'Open Reading Statistics & Analytics (WPM over time)' },
     { key: 'D', desc: 'Toggle Dark / Light Theme mode' },
