@@ -223,9 +223,17 @@ export const RSVPMorphWord: React.FC<RSVPMorphWordProps> = ({
       const blur1 = Math.min(22, Math.max(0, 7 / Math.max(0.08, invFraction) - 7));
       const opacity1 = Math.pow(invFraction, 0.45) * 100;
 
+      const isFadingZoom = settings.fadingZoomEntrance !== false;
+      const offset2 = currentOffsetRef.current;
+      const offset2Str = offset2 !== 0 ? `translateX(${offset2}px)` : 'translateX(0px)';
+      const scale2 = isFadingZoom ? 0.95 + 0.05 * smoothFraction : 1;
+
       if (rawFraction < 1) {
         current2.style.filter = `blur(${blur2}px)`;
         current2.style.opacity = `${opacity2}%`;
+        current2.style.transform = isFadingZoom
+          ? `${offset2Str} scale(${scale2.toFixed(4)})`
+          : offset2Str;
 
         current1.style.filter = `blur(${blur1}px)`;
         current1.style.opacity = `${opacity1}%`;
@@ -235,6 +243,7 @@ export const RSVPMorphWord: React.FC<RSVPMorphWordProps> = ({
         // Cooldown complete: new word is 100% crisp and settled in the middle
         current2.style.filter = 'none';
         current2.style.opacity = '100%';
+        current2.style.transform = offset2Str;
 
         current1.style.filter = 'none';
         current1.style.opacity = '0%';
@@ -268,9 +277,10 @@ export const RSVPMorphWord: React.FC<RSVPMorphWordProps> = ({
     settings.wpm,
     settings.smartPunctuationPause
   );
+  const isFadingZoom = settings.fadingZoomEntrance !== false;
   const fadeDurationMs = isPlaying
-    ? Math.min(130, Math.max(50, standardDelay * 0.25))
-    : 160;
+    ? Math.min(140, Math.max(isFadingZoom ? 60 : 50, standardDelay * 0.28))
+    : (isFadingZoom ? 180 : 160);
 
   // Case 0: Multi-Word Horizontal Looping Reel (1, 3, or 5 Words Aligned Horizontally with GSAP Swipe)
   if (settings.chunkSize && settings.chunkSize > 1) {
@@ -309,7 +319,9 @@ export const RSVPMorphWord: React.FC<RSVPMorphWordProps> = ({
           key={currentIndex}
           ref={standardWordRef}
           dir={currentWord.isRtl ? 'rtl' : 'ltr'}
-          className="inline-block text-center whitespace-nowrap will-change-transform animate-rsvp-fade-in"
+          className={`inline-block text-center whitespace-nowrap will-change-transform ${
+            isFadingZoom ? 'animate-rsvp-fade-zoom' : 'animate-rsvp-fade-in'
+          }`}
           style={{
             transform:
               settings.opticalCenterLock && standardOffset !== 0

@@ -87,6 +87,7 @@ const DEFAULT_SETTINGS: ReaderSettings = {
   warmupStartWpm: 180,
   driftAnimation: false,
   driftIntensity: 'moderate',
+  fadingZoomEntrance: true,
 };
 
 const STORAGE_KEYS = {
@@ -132,6 +133,7 @@ export default function App() {
           if (!['subtle', 'moderate', 'dynamic'].includes(merged.driftIntensity as string)) {
             merged.driftIntensity = 'moderate';
           }
+          if (typeof merged.fadingZoomEntrance !== 'boolean') merged.fadingZoomEntrance = true;
           merged.letterSpacingPreset = resolveLetterSpacingPreset(merged);
           merged.letterSpacing = resolveLetterSpacingEm(merged);
           return merged;
@@ -332,16 +334,21 @@ export default function App() {
     };
   }, [activeDocumentHandle]);
 
+  // Smart Auto-Pause state
+  const [isAutoPaused, setIsAutoPaused] = useState(false);
+  const [autoPauseReason, setAutoPauseReason] = useState<AutoPauseReason | null>(null);
+
   // 5. Reading Focus Timer & Sessions (Requirement 4 & 5)
   const [timerSecondsRemaining, setTimerSecondsRemaining] = useState<number>(0);
   const [initialTimerDuration, setInitialTimerDuration] = useState<number>(0);
   const [isTimerRunning, setIsTimerRunning] = useState(false);
   const [isTimerSet, setIsTimerSet] = useState(false);
   const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const wasTimerRunningBeforeAutoPauseRef = useRef(false);
 
-  // Timer countdown effect
+  // Timer countdown effect - halts while auto-paused
   useEffect(() => {
-    if (isTimerRunning && timerSecondsRemaining > 0) {
+    if (isTimerRunning && timerSecondsRemaining > 0 && !isAutoPaused) {
       timerIntervalRef.current = setInterval(() => {
         setTimerSecondsRemaining((prev) => {
           if (prev <= 1) {
@@ -371,7 +378,7 @@ export default function App() {
         clearInterval(timerIntervalRef.current);
       }
     };
-  }, [isTimerRunning, timerSecondsRemaining, settings.doNotDisturb]);
+  }, [isTimerRunning, timerSecondsRemaining, isAutoPaused, settings.doNotDisturb]);
 
   // Show Toast with Do Not Disturb enforcement (Requirement 5)
   const showToast = useCallback((msg: string) => {
@@ -870,17 +877,21 @@ export default function App() {
     totalWordsRef.current = totalWords;
   }, [totalWords]);
 
-  // Smart Auto-Pause state
-  const [isAutoPaused, setIsAutoPaused] = useState(false);
-  const [autoPauseReason, setAutoPauseReason] = useState<AutoPauseReason | null>(null);
-
   const handleAutoPause = useCallback((reason: AutoPauseReason) => {
     setIsPlaying(false);
     setIsAutoPaused(true);
     setAutoPauseReason(reason);
+
+    // Auto-pause feature controls reading stats & focus timer:
+    // If a focus timer was actively counting down, freeze it and remember to resume on return
+    if (isTimerRunning) {
+      wasTimerRunningBeforeAutoPauseRef.current = true;
+      setIsTimerRunning(false);
+    }
+
     const reasonText = reason === 'mouse' ? 'cursor left window' : 'window lost focus';
     showToast(`⏸️ Smart Auto-Paused (${reasonText})`);
-  }, [showToast]);
+  }, [isTimerRunning, showToast]);
 
   // Hook for Smart Auto-Pause
   useSmartAutoPause({
@@ -921,13 +932,24 @@ export default function App() {
     setIsAutoPaused(false);
     setAutoPauseReason(null);
     setIsPlaying((prev) => {
-      if (!prev && currentIndexRef.current >= totalWordsRef.current - 1) {
-        handleIndexChange(0);
+      if (!prev) {
+        // Resuming reading: If focus timer was paused by auto-pause, resume the timer!
+        if (wasTimerRunningBeforeAutoPauseRef.current && timerSecondsRemaining > 0) {
+          setIsTimerRunning(true);
+          wasTimerRunningBeforeAutoPauseRef.current = false;
+        }
+        if (currentIndexRef.current >= totalWordsRef.current - 1) {
+          handleIndexChange(0);
+          return true;
+        }
         return true;
+      } else {
+        // Explicit pause by user: do not auto-resume timer later
+        wasTimerRunningBeforeAutoPauseRef.current = false;
+        return false;
       }
-      return !prev;
     });
-  }, [handleIndexChange]);
+  }, [handleIndexChange, timerSecondsRemaining]);
 
   const handleRestart = useCallback(() => {
     setIsAutoPaused(false);
@@ -1100,6 +1122,8 @@ export default function App() {
     wpm: settings.wpm,
     documentTitle: currentTitle,
     isIdle,
+    isAutoPaused,
+    warmupStatus,
   });
 
   return (

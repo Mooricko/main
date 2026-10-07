@@ -4,12 +4,14 @@ import {
   ReadingHeatmapData, 
   ReadingSessionRecord, 
   ReadingStatsSummary,
-  WpmHistoryPoint 
+  WpmHistoryPoint,
+  SessionSpeedProgressPoint
 } from '../types';
 import { generateReadingHeatmap } from '../utils/readingHeatmap';
 import { safeStorage } from '../utils/safeStorage';
 
 const STORAGE_KEY_SESSIONS = 'adhd_reading_sessions_history_v1';
+const STORAGE_KEY_CURRENT_SPEED_TREND = 'adhd_current_session_speed_trend_v1';
 
 interface UseReadingHeatmapProps {
   words: HighlightedWordParts[];
@@ -19,6 +21,8 @@ interface UseReadingHeatmapProps {
   wpm: number;
   documentTitle: string;
   isIdle?: boolean;
+  isAutoPaused?: boolean;
+  warmupStatus?: { isWarmingUp: boolean; currentWpm: number };
 }
 
 interface ActiveSessionData {
@@ -28,7 +32,15 @@ interface ActiveSessionData {
   dwellMs: number;
   targetWpm: number;
   documentTitle: string;
+  speedPoints: SessionSpeedProgressPoint[];
+  lastSampleDwellSec: number;
 }
+
+const formatSecToTimeLabel = (sec: number): string => {
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${s.toString().padStart(2, '0')}`;
+};
 
 export function useReadingHeatmap({
   words,
@@ -38,6 +50,8 @@ export function useReadingHeatmap({
   wpm,
   documentTitle,
   isIdle = false,
+  isAutoPaused = false,
+  warmupStatus,
 }: UseReadingHeatmapProps) {
   const effectiveTotalWords = customTotalWords ?? words.length;
 
@@ -120,6 +134,14 @@ export function useReadingHeatmap({
     const session = activeSessionRef.current;
     if (!session) return;
 
+    if (session.speedPoints && session.speedPoints.length > 0) {
+      try {
+        safeStorage.setItem(STORAGE_KEY_CURRENT_SPEED_TREND, JSON.stringify(session.speedPoints));
+      } catch {
+        // Ignore
+      }
+    }
+
     if (session.wordsSet.size >= 4 || session.dwellMs >= 2500) {
       const durationMins = session.dwellMs / 60000;
       let calculatedWpm = durationMins > 0 
@@ -161,6 +183,7 @@ export function useReadingHeatmap({
   useEffect(() => {
     if (isPlaying) {
       if (!activeSessionRef.current) {
+        const initialWpm = (warmupStatus?.isWarmingUp ? warmupStatus.currentWpm : wpm) || 320;
         activeSessionRef.current = {
           id: `session_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
           startTime: Date.now(),
@@ -168,15 +191,57 @@ export function useReadingHeatmap({
           dwellMs: 0,
           targetWpm: wpm,
           documentTitle: documentTitle || 'Reading Session',
+          speedPoints: [
+            {
+              second: 0,
+              timeLabel: '0:00',
+              wpm: initialWpm,
+              targetWpm: wpm,
+              wordsRead: 1,
+              wordIndex: currentIndex,
+            },
+          ],
+          lastSampleDwellSec: 0,
         };
       } else {
         activeSessionRef.current.targetWpm = wpm;
         activeSessionRef.current.documentTitle = documentTitle || 'Reading Session';
       }
     } else {
-      finalizeActiveSession();
+      // If paused due to smart auto-pause, DO NOT finalize session!
+      // Keep session paused so stats timer is controlled and frozen by auto-pause
+      if (!isAutoPaused) {
+        finalizeActiveSession();
+      }
     }
-  }, [isPlaying, wpm, documentTitle, finalizeActiveSession, currentIndex]);
+  }, [isPlaying, isAutoPaused, wpm, documentTitle, finalizeActiveSession, currentIndex, warmupStatus]);
+
+  // When auto-paused, record auto-pause event in current session speed trend and freeze dwell timer
+  useEffect(() => {
+    if (isAutoPaused && activeSessionRef.current) {
+      const activeSec = Math.max(1, Math.round(activeSessionRef.current.dwellMs / 1000));
+      const autoPausePoint: SessionSpeedProgressPoint = {
+        second: activeSec,
+        timeLabel: formatSecToTimeLabel(activeSec),
+        wpm: 0,
+        targetWpm: wpm,
+        wordsRead: activeSessionRef.current.wordsSet.size,
+        wordIndex: currentIndex,
+        isAutoPaused: true,
+        annotation: 'Auto-Paused',
+      };
+      activeSessionRef.current.speedPoints.push(autoPausePoint);
+      try {
+        safeStorage.setItem(STORAGE_KEY_CURRENT_SPEED_TREND, JSON.stringify(activeSessionRef.current.speedPoints));
+      } catch {
+        // Ignore
+      }
+      setRenderTick((t) => (t + 1) % 10000);
+    } else if (!isAutoPaused) {
+      // Reset timestamp ref so time spent away during auto-pause is NOT added to cognitive dwell
+      lastTimestampRef.current = performance.now();
+    }
+  }, [isAutoPaused, wpm, currentIndex]);
 
   // Clean up and finalize active session when documentTitle changes or unmounts
   useEffect(() => {
@@ -194,8 +259,8 @@ export function useReadingHeatmap({
     const prevIdx = lastIndexRef.current;
     lastIndexRef.current = currentIndex;
 
-    // Only attribute dwell if reasonable duration (< 25 seconds) and not idle
-    if (prevIdx >= 0 && prevIdx < effectiveTotalWords && elapsed > 20 && elapsed < 25000 && !isIdle) {
+    // Only attribute dwell if reasonable duration (< 25 seconds), not idle, and NOT auto-paused
+    if (prevIdx >= 0 && prevIdx < effectiveTotalWords && elapsed > 20 && elapsed < 25000 && !isIdle && !isAutoPaused) {
       dwellTimesRef.current[prevIdx] = (dwellTimesRef.current[prevIdx] || 0) + elapsed;
       
       // Also attribute to active session if currently reading
@@ -204,16 +269,36 @@ export function useReadingHeatmap({
         activeSessionRef.current.wordsSet.add(currentIndex);
         activeSessionRef.current.dwellMs += elapsed;
         activeSessionRef.current.targetWpm = wpm;
+
+        // Sample speed point periodically (every >= 2 seconds of accumulated reading time)
+        const currentActiveSec = Math.round(activeSessionRef.current.dwellMs / 1000);
+        if (currentActiveSec >= activeSessionRef.current.lastSampleDwellSec + 2) {
+          activeSessionRef.current.lastSampleDwellSec = currentActiveSec;
+          const currentWpm = (warmupStatus?.isWarmingUp ? warmupStatus.currentWpm : wpm) || 320;
+          activeSessionRef.current.speedPoints.push({
+            second: currentActiveSec,
+            timeLabel: formatSecToTimeLabel(currentActiveSec),
+            wpm: currentWpm,
+            targetWpm: wpm,
+            wordsRead: activeSessionRef.current.wordsSet.size,
+            wordIndex: currentIndex,
+          });
+          try {
+            safeStorage.setItem(STORAGE_KEY_CURRENT_SPEED_TREND, JSON.stringify(activeSessionRef.current.speedPoints));
+          } catch {
+            // Ignore
+          }
+        }
       }
 
       scheduleSave();
       setRenderTick((t) => (t + 1) % 10000);
     }
-  }, [currentIndex, isIdle, effectiveTotalWords, scheduleSave, wpm]);
+  }, [currentIndex, isIdle, isAutoPaused, effectiveTotalWords, scheduleSave, wpm, warmupStatus]);
 
-  // Periodic ticker during active reading playback or focus pause to update dwell in real time
+  // Periodic ticker during active reading playback to update dwell and speed trend in real time
   useEffect(() => {
-    if (isIdle || effectiveTotalWords === 0) return;
+    if (isIdle || isAutoPaused || !isPlaying || effectiveTotalWords === 0) return;
 
     const interval = setInterval(() => {
       const now = performance.now();
@@ -227,6 +312,26 @@ export function useReadingHeatmap({
           activeSessionRef.current.wordsSet.add(currentIndex);
           activeSessionRef.current.dwellMs += elapsed;
           activeSessionRef.current.targetWpm = wpm;
+
+          // Add periodic speed trend sample point every >= 2s
+          const currentActiveSec = Math.round(activeSessionRef.current.dwellMs / 1000);
+          if (currentActiveSec >= activeSessionRef.current.lastSampleDwellSec + 2) {
+            activeSessionRef.current.lastSampleDwellSec = currentActiveSec;
+            const currentWpm = (warmupStatus?.isWarmingUp ? warmupStatus.currentWpm : wpm) || 320;
+            activeSessionRef.current.speedPoints.push({
+              second: currentActiveSec,
+              timeLabel: formatSecToTimeLabel(currentActiveSec),
+              wpm: currentWpm,
+              targetWpm: wpm,
+              wordsRead: activeSessionRef.current.wordsSet.size,
+              wordIndex: currentIndex,
+            });
+            try {
+              safeStorage.setItem(STORAGE_KEY_CURRENT_SPEED_TREND, JSON.stringify(activeSessionRef.current.speedPoints));
+            } catch {
+              // Ignore
+            }
+          }
         }
 
         lastTimestampRef.current = now;
@@ -236,7 +341,7 @@ export function useReadingHeatmap({
     }, 500);
 
     return () => clearInterval(interval);
-  }, [isPlaying, isIdle, currentIndex, effectiveTotalWords, scheduleSave, wpm]);
+  }, [isPlaying, isIdle, isAutoPaused, currentIndex, effectiveTotalWords, scheduleSave, wpm, warmupStatus]);
 
   // Compute the rich heatmap data
   const heatmapData: ReadingHeatmapData = useMemo(() => {
@@ -359,7 +464,55 @@ export function useReadingHeatmap({
       });
     }
 
-    // 4. Complexity breakdown from heatmap buckets
+    // 4. Retrieve current session speed trend points
+    let currentSessionSpeedTrend: SessionSpeedProgressPoint[] = [];
+    if (active && active.speedPoints && active.speedPoints.length > 0) {
+      currentSessionSpeedTrend = [...active.speedPoints];
+    } else {
+      try {
+        const saved = safeStorage.getItem(STORAGE_KEY_CURRENT_SPEED_TREND);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            currentSessionSpeedTrend = parsed;
+          }
+        }
+      } catch {
+        // Ignore
+      }
+    }
+
+    // If completely empty, generate starting anchor point
+    if (currentSessionSpeedTrend.length === 0) {
+      const startingWpm = (warmupStatus?.isWarmingUp ? warmupStatus.currentWpm : wpm) || 320;
+      currentSessionSpeedTrend = [
+        {
+          second: 0,
+          timeLabel: '0:00',
+          wpm: startingWpm,
+          targetWpm: wpm,
+          wordsRead: activeWords || (currentDocWordsCount > 0 ? 1 : 0),
+          wordIndex: currentIndex,
+        },
+      ];
+    }
+
+    const currentSessionWordsRead = active
+      ? active.wordsSet.size
+      : (currentSessionSpeedTrend[currentSessionSpeedTrend.length - 1]?.wordsRead || currentDocWordsCount);
+
+    const currentSessionDwellMs = active
+      ? active.dwellMs
+      : ((currentSessionSpeedTrend[currentSessionSpeedTrend.length - 1]?.second || 0) * 1000 || currentDocDwellTotal);
+
+    let currentSessionPeakWpm = currentSessionSpeedTrend.reduce((max, pt) => Math.max(max, pt.wpm), 0);
+    if (currentSessionPeakWpm < 10) currentSessionPeakWpm = wpm;
+
+    const currentSessionAvgWpm = active && active.dwellMs > 1000 && active.wordsSet.size > 0
+      ? Math.round(active.wordsSet.size / (active.dwellMs / 60000))
+      : (wpmHistory.length > 0 ? wpmHistory[wpmHistory.length - 1].avgWpm : wpm);
+
+    // 5. Complexity breakdown from heatmap buckets
     let fastWords = 0;
     let steadyWords = 0;
     let complexWords = 0;
@@ -383,6 +536,12 @@ export function useReadingHeatmap({
       currentDocAvgWpm,
       wpmHistory,
       recentSessions: pastSessions,
+      currentSessionSpeedTrend,
+      currentSessionWordsRead,
+      currentSessionDwellMs,
+      currentSessionAvgWpm,
+      currentSessionPeakWpm,
+      isAutoPaused: Boolean(isAutoPaused),
       complexityBreakdown: {
         fastWords,
         steadyWords,
@@ -391,7 +550,7 @@ export function useReadingHeatmap({
       },
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pastSessions, heatmapData, wpm, documentTitle, renderTick]);
+  }, [pastSessions, heatmapData, wpm, documentTitle, renderTick, isAutoPaused, warmupStatus]);
 
   // Reset heatmap data for current document
   const resetHeatmap = useCallback(() => {
@@ -410,6 +569,7 @@ export function useReadingHeatmap({
     setPastSessions([]);
     try {
       safeStorage.removeItem(STORAGE_KEY_SESSIONS);
+      safeStorage.removeItem(STORAGE_KEY_CURRENT_SPEED_TREND);
       safeStorage.removeItem(storageKey);
     } catch {
       // Ignore

@@ -595,6 +595,36 @@ export const RSVPReader: React.FC<RSVPReaderProps> = ({
             <span className="hidden sm:inline">Drift</span>
           </button>
 
+          {/* Fading Zoom Entrance Quick Toggle */}
+          <button
+            id="toggle-fading-zoom-btn"
+            type="button"
+            onClick={() => onUpdateSettings({ fadingZoomEntrance: settings.fadingZoomEntrance === false ? true : false })}
+            title={
+              settings.fadingZoomEntrance !== false
+                ? 'Fading Zoom Entrance: ON (Subtly zooms new words in from optical depth to lock eyes in center)'
+                : 'Fading Zoom Entrance: OFF (Click to enable subtle entrance zoom)'
+            }
+            aria-label="Toggle Fading Zoom Entrance"
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs font-mono transition-all ${
+              settings.fadingZoomEntrance !== false
+                ? 'font-bold shadow-xs'
+                : `${theme.borderClass} ${theme.textMuted} opacity-70 hover:opacity-100`
+            }`}
+            style={
+              settings.fadingZoomEntrance !== false
+                ? {
+                    borderColor: `${highlight.hex}60`,
+                    color: highlight.hex,
+                    backgroundColor: `${highlight.hex}18`,
+                  }
+                : undefined
+            }
+          >
+            <Crosshair className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Zoom</span>
+          </button>
+
           {warmupStatus?.isWarmingUp ? (
             <div 
               className="flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-300 text-xs font-mono"

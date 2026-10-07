@@ -12,7 +12,8 @@ import {
   Award,
   ChevronRight,
   Layers,
-  Sparkles
+  Sparkles,
+  Pause
 } from 'lucide-react';
 import { 
   ResponsiveContainer, 
@@ -24,7 +25,7 @@ import {
   CartesianGrid, 
   ReferenceLine 
 } from 'recharts';
-import { ReaderSettings, ReadingStatsSummary, WpmHistoryPoint } from '../types';
+import { ReaderSettings, ReadingStatsSummary, WpmHistoryPoint, SessionSpeedProgressPoint } from '../types';
 import { THEME_CONFIGS, HIGHLIGHT_COLORS } from '../utils/themeStyles';
 
 interface ReadingStatsModalProps {

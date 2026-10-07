@@ -85,6 +85,45 @@
   animation-fill-mode: forwards;
 }
 
+/* Subtle Fading Zoom Entrance Animation for RSVP Word Display:
+   Smoothly scales in from 95% depth and fades from 20% opacity with micro-blur
+   to lock visual focus immediately onto the central recognition point without distraction. */
+@keyframes rsvpFadingZoomEntrance {
+  0% {
+    opacity: 0.2;
+    filter: blur(0.9px);
+    transform: var(--rsvp-offset, translateX(0)) scale(0.95);
+  }
+  60% {
+    opacity: 0.94;
+    filter: blur(0.15px);
+    transform: var(--rsvp-offset, translateX(0)) scale(0.99);
+  }
+  100% {
+    opacity: 1;
+    filter: blur(0);
+    transform: var(--rsvp-offset, translateX(0)) scale(1);
+  }
+}
+
+.animate-rsvp-fade-zoom {
+  animation-name: rsvpFadingZoomEntrance;
+  animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  animation-fill-mode: forwards;
+  transform-origin: center center;
+  will-change: transform, opacity, filter;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-rsvp-fade-zoom,
+  .animate-rsvp-fade-in {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: var(--rsvp-offset, translateX(0)) !important;
+    filter: none !important;
+  }
+}
+
 /* uiverse.io/3bdel3ziz-T/proud-squid-15 Play / Pause Toggle Button */
 .proud-squid-toggle {
   display: inline-flex;

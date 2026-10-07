@@ -27,9 +27,13 @@ export class ErrorBoundary extends React.Component<Props, State> {
     console.error('ADHD Reader caught an uncaught render error:', error, errorInfo);
   }
 
-  private handleResetState = () => {
+  private handleResetState = async () => {
     try {
       safeStorage.clearAll();
+      if (typeof window !== 'undefined' && 'caches' in window) {
+        const cacheKeys = await caches.keys();
+        await Promise.all(cacheKeys.map((key) => caches.delete(key)));
+      }
     } catch {
       // Ignore
     }

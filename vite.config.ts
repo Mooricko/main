@@ -6,17 +6,43 @@ import {urlExtractPlugin} from './src/server/urlExtractPlugin';
 
 export default defineConfig(() => {
   return {
-    plugins: [react(), tailwindcss(), urlExtractPlugin()],
+    plugins: [
+      react(),
+      tailwindcss(),
+      urlExtractPlugin(),
+      {
+        name: 'vite-no-cache-deps-plugin',
+        configureServer(server) {
+          server.middlewares.use((_req, res, next) => {
+            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+            next();
+          });
+        },
+      },
+    ],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
-        'react': path.resolve(__dirname, 'node_modules/react'),
-        'react-dom': path.resolve(__dirname, 'node_modules/react-dom'),
       },
       dedupe: ['react', 'react-dom'],
     },
     optimizeDeps: {
-      include: ['react', 'react-dom', 'react-dom/client'],
+      include: [
+        'react',
+        'react-dom',
+        'react-dom/client',
+        'react/jsx-runtime',
+        'react/jsx-dev-runtime',
+        'lucide-react',
+        'motion',
+        'motion/react',
+        'recharts',
+        'canvas-confetti',
+        'jszip',
+        'gsap',
+        'pdfjs-dist',
+      ],
+      force: true,
     },
     build: {
       outDir: 'dist',

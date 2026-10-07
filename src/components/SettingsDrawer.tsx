@@ -571,6 +571,28 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
               />
             </div>
 
+            {/* Fading Zoom Entrance Animation */}
+            <div className="flex items-center justify-between p-3 rounded-xl border border-white/5 bg-black/10">
+              <div>
+                <div className={`text-xs font-semibold ${theme.textPrimary} flex items-center gap-1.5`}>
+                  <span>Fading Zoom Entrance</span>
+                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-red-500/15 text-red-400 font-medium">
+                    Center Lock
+                  </span>
+                </div>
+                <div className={`text-[11px] ${theme.textMuted}`}>
+                  Subtle scale & depth fade on incoming words to anchor gaze firmly in the center
+                </div>
+              </div>
+              <input
+                id="toggle-fading-zoom-entrance"
+                type="checkbox"
+                checked={settings.fadingZoomEntrance !== false}
+                onChange={(e) => onUpdateSettings({ fadingZoomEntrance: e.target.checked })}
+                className="w-4 h-4 rounded text-red-500 focus:ring-red-500 focus:ring-offset-0 cursor-pointer"
+              />
+            </div>
+
             {/* Reticle Guides */}
             <div className="flex items-center justify-between p-3 rounded-xl border border-white/5 bg-black/10">
               <div>

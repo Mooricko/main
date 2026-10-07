@@ -58,6 +58,7 @@ export interface ReaderSettings {
   warmupStartWpm: number; // User-defined starting speed for Warm-up Mode (e.g. 180 WPM)
   driftAnimation: boolean; // Subtle horizontal drift of active word to prevent fixed-point staring visual fatigue
   driftIntensity: 'subtle' | 'moderate' | 'dynamic'; // Intensity amplitude of horizontal drift
+  fadingZoomEntrance?: boolean; // Subtle fading zoom entrance animation when a new word appears to lock eyes in center
 }
 
 export interface SmartPaceAnalysis {
@@ -132,6 +133,17 @@ export interface WpmHistoryPoint {
   documentTitle: string;
 }
 
+export interface SessionSpeedProgressPoint {
+  second: number;
+  timeLabel: string;
+  wpm: number;
+  targetWpm: number;
+  wordsRead: number;
+  wordIndex: number;
+  isAutoPaused?: boolean;
+  annotation?: string;
+}
+
 export interface ReadingStatsSummary {
   totalWordsRead: number;
   totalReadingTimeMs: number;
@@ -142,6 +154,12 @@ export interface ReadingStatsSummary {
   currentDocAvgWpm: number;
   wpmHistory: WpmHistoryPoint[];
   recentSessions: ReadingSessionRecord[];
+  currentSessionSpeedTrend: SessionSpeedProgressPoint[];
+  currentSessionWordsRead?: number;
+  currentSessionDwellMs?: number;
+  currentSessionAvgWpm?: number;
+  currentSessionPeakWpm?: number;
+  isAutoPaused?: boolean;
   complexityBreakdown: {
     fastWords: number;
     steadyWords: number;
