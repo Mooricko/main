@@ -1,0 +1,263 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    transition: background-color 0.25s ease, color 0.25s ease;
+    overflow-x: hidden;
+  }
+}
+
+.font-lexend {
+  font-family: 'Lexend', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.font-atkinson {
+  font-family: 'Atkinson Hyperlegible', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.font-jetbrains {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.font-newsreader {
+  font-family: 'Newsreader', Georgia, serif;
+}
+
+.font-jakarta {
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.font-vazirmatn {
+  font-family: 'Vazirmatn', -apple-system, BlinkMacSystemFont, 'Segoe UI', Tahoma, Arial, sans-serif;
+}
+
+/* Custom scrollbars for clean UI */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.25);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.4);
+}
+
+/* Optical Reticle Center Line Glow */
+.reticle-line {
+  position: relative;
+}
+
+.reticle-line::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 2px;
+  height: 14px;
+  border-radius: 2px;
+}
+
+/* Gentle, comfortable CSS fade-in animation for standard RSVP word display */
+@keyframes rsvpComfortFadeIn {
+  0% {
+    opacity: 0.32;
+    filter: blur(1.2px);
+    transform: translateY(0.5px) var(--rsvp-offset, translateX(0));
+  }
+  100% {
+    opacity: 1;
+    filter: blur(0);
+    transform: translateY(0) var(--rsvp-offset, translateX(0));
+  }
+}
+
+.animate-rsvp-fade-in {
+  animation-name: rsvpComfortFadeIn;
+  animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  animation-fill-mode: forwards;
+}
+
+/* uiverse.io/3bdel3ziz-T/proud-squid-15 Play / Pause Toggle Button */
+.proud-squid-toggle {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.proud-squid-label {
+  width: 100px;
+  height: 50px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  padding: 5px;
+  background: #272727;
+  border-radius: 50px;
+  box-shadow: 0px 0px 16px -8px rgba(254, 254, 254, 0.55);
+  user-select: none;
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.25s ease;
+}
+
+.proud-squid-label:hover {
+  transform: scale(1.03);
+  box-shadow: 0px 0px 20px -6px rgba(254, 254, 254, 0.75);
+}
+
+.proud-squid-label:active {
+  transform: scale(0.97);
+}
+
+/* Background outline text sliding between PLAY and PAUSE */
+.proud-squid-label::before,
+.proud-squid-label::after {
+  content: "PLAY";
+  overflow: hidden;
+  font-size: 26px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  position: absolute;
+  left: 64%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 0;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  color: transparent;
+  -webkit-text-stroke: 1px rgba(255, 255, 255, 0.22);
+  transition: all 0.5s cubic-bezier(1, 0, 0, 1);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.proud-squid-label::after {
+  content: "PAUSE";
+  left: -60%;
+  transform: translate(-50%, -50%);
+}
+
+.proud-squid-label:has(.proud-squid-circle:checked)::before,
+.proud-squid-label[data-checked="true"]::before {
+  left: 160%;
+  transform: translate(-50%, -50%);
+}
+
+.proud-squid-label:has(.proud-squid-circle:checked)::after,
+.proud-squid-label[data-checked="true"]::after {
+  left: 36%;
+  transform: translate(-50%, -50%);
+  -webkit-text-stroke: 1px rgba(255, 255, 255, 0.35);
+}
+
+/* The Sliding Knob */
+.proud-squid-circle {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  width: 40px;
+  height: 40px;
+  background: #5e5e5e;
+  border-radius: 50%;
+  transition: all 0.5s cubic-bezier(1, 0, 0, 1);
+  left: 0;
+  cursor: pointer;
+  z-index: 2;
+  margin: 0;
+  outline: none;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.proud-squid-circle:checked,
+.proud-squid-label[data-checked="true"] .proud-squid-circle {
+  background: var(--squid-accent, #f43f5e);
+  left: calc(100% - 40px);
+  box-shadow: 0 0 12px var(--squid-accent, #f43f5e);
+}
+
+/* Play Icon (Triangle) using pseudo elements */
+.proud-squid-circle::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-35%, -50%);
+  display: inline-block;
+  width: 0;
+  height: 0;
+  border-top: 7px solid transparent;
+  border-bottom: 7px solid transparent;
+  border-left: 11px solid #fefefe;
+  border-right: none;
+  z-index: 3;
+  transition: all 0.25s cubic-bezier(1, 0, 0, 1);
+  pointer-events: none;
+  transition-delay: 50ms;
+}
+
+/* Pause / Stop Square */
+.proud-squid-circle::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: inline-block;
+  width: 0;
+  height: 0;
+  background-color: #fefefe;
+  border-radius: 3px;
+  z-index: 3;
+  opacity: 0;
+  transition: all 0.25s cubic-bezier(1, 0, 0, 1);
+  pointer-events: none;
+}
+
+/* When Checked (Playing): Triangle vanishes, Square expands */
+.proud-squid-circle:checked::before,
+.proud-squid-label[data-checked="true"] .proud-squid-circle::before {
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(0.3);
+}
+
+.proud-squid-circle:checked::after,
+.proud-squid-label[data-checked="true"] .proud-squid-circle::after {
+  width: 16px;
+  height: 16px;
+  opacity: 1;
+  border-radius: 4px;
+  transition-delay: 100ms;
+}
+
+/* Metallic Shader Button 3D Utilities */
+.transform-3d {
+  transform-style: preserve-3d;
+}
+.translate-z-0 {
+  transform: translateZ(0px);
+}
+.translate-z-2\.5 {
+  transform: translateZ(10px);
+}
+.translate-z-5 {
+  transform: translateZ(20px);
+}
+.translate-z-6\.25 {
+  transform: translateZ(25px);
+}
+
+
+
+
