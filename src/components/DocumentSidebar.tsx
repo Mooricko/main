@@ -10,7 +10,9 @@ import {
   PanelLeftOpen,
   FileText,
   Search,
-  BookOpen
+  BookOpen,
+  History,
+  Trash2
 } from 'lucide-react';
 import { 
   ReaderSettings, 
@@ -34,6 +36,9 @@ import { PageJumpControl } from './PageJumpControl';
 import { ChapterNavPanel } from './ChapterNavPanel';
 import { DocumentSearchBox } from './DocumentSearchBox';
 import { InputHub } from './InputHub/InputHub';
+import { SAMPLE_TEXTS } from '../data/sampleTexts';
+import { isRtlText } from '../utils/textParser';
+import { documentStorageService } from '../services/document/documentStorageService';
 
 interface DocumentSidebarProps {
   isOpen: boolean;
@@ -93,6 +98,7 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = ({
   isIdle = false,
 }) => {
   const [resolvedPosition, setResolvedPosition] = useState<ResolvedDocumentPosition | null>(null);
+  const [overviewSubTab, setOverviewSubTab] = useState<'overview' | 'samples' | 'history'>('overview');
 
   const theme = THEME_CONFIGS[settings.theme] || THEME_CONFIGS.midnight;
   const highlight = HIGHLIGHT_COLORS[settings.highlightColor] || HIGHLIGHT_COLORS.red;
@@ -198,6 +204,65 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = ({
     }
     // Switch to overview or keep open for immediate table of contents reading
     onTabChange('overview');
+  };
+
+  const handleSelectSample = (sample: SavedDocument) => {
+    const text = sample.text || '';
+    const doc: ReaderDocument = {
+      id: sample.id,
+      sourceType: sample.sourceType || 'text',
+      title: sample.title,
+      content: text,
+      direction: sample.direction || (isRtlText(text) ? 'rtl' : 'ltr'),
+      metadata: {
+        wordCount: sample.wordCount,
+      },
+    };
+    if (onImportDocument) {
+      onImportDocument(doc);
+    } else {
+      onApplyText(text, sample.title);
+    }
+    setOverviewSubTab('overview');
+    onClose();
+  };
+
+  const handleSelectHistory = async (historyItem: SavedDocument) => {
+    let content = historyItem.text;
+    if (!content) {
+      const dbText = await documentStorageService.getDocumentText(historyItem.id);
+      if (dbText) {
+        content = dbText;
+      }
+    }
+    if (!content) {
+      const sample = SAMPLE_TEXTS.find((s) => s.id === historyItem.id);
+      if (sample && sample.text) {
+        content = sample.text;
+      }
+    }
+    if (!content) {
+      console.warn(`[DocumentSidebar] Could not load text for history document ${historyItem.id}`);
+      return;
+    }
+
+    const doc: ReaderDocument = {
+      id: historyItem.id,
+      sourceType: historyItem.sourceType || 'text',
+      title: historyItem.title,
+      content,
+      direction: historyItem.direction || (isRtlText(content) ? 'rtl' : 'ltr'),
+      metadata: {
+        wordCount: historyItem.wordCount,
+      },
+    };
+    if (onImportDocument) {
+      onImportDocument(doc);
+    } else {
+      onApplyText(content, historyItem.title);
+    }
+    setOverviewSubTab('overview');
+    onClose();
   };
 
   const hasPreviousProgress = currentWordIndex > 10;
@@ -309,11 +374,6 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = ({
           >
             <Sparkles className="w-3.5 h-3.5" />
             <span>Universal Input Hub</span>
-            {savedDocuments.length > 0 && (
-              <span className="hidden sm:inline-block text-[10px] px-1.5 py-0.2 rounded-full bg-black/30 font-mono">
-                {savedDocuments.length}
-              </span>
-            )}
           </button>
         </div>
 
@@ -321,7 +381,60 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = ({
         <div className="flex-1 overflow-y-auto min-h-0">
           {/* TAB 1: Content & Overview */}
           {activeTab === 'overview' && (
-            <div className="p-4 sm:p-5 space-y-5 divide-y divide-slate-800/60">
+            <div className="p-4 sm:p-5 space-y-4">
+              {/* Overview Sub-Tabs Switcher */}
+              <div className="flex items-center gap-1.5 p-1 bg-slate-900/80 rounded-xl border border-slate-800 shrink-0">
+                <button
+                  type="button"
+                  id="overview-subtab-overview-btn"
+                  onClick={() => setOverviewSubTab('overview')}
+                  className={`flex-1 flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                    overviewSubTab === 'overview'
+                      ? 'bg-slate-800 text-white shadow-xs'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Layers className="w-3.5 h-3.5 text-red-400" />
+                  <span>Overview</span>
+                </button>
+
+                <button
+                  type="button"
+                  id="overview-subtab-samples-btn"
+                  onClick={() => setOverviewSubTab('samples')}
+                  className={`flex-1 flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                    overviewSubTab === 'samples'
+                      ? 'bg-slate-800 text-white shadow-xs'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <BookOpen className="w-3.5 h-3.5 text-blue-400" />
+                  <span>Sample Library</span>
+                </button>
+
+                <button
+                  type="button"
+                  id="overview-subtab-history-btn"
+                  onClick={() => setOverviewSubTab('history')}
+                  className={`flex-1 flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all relative ${
+                    overviewSubTab === 'history'
+                      ? 'bg-slate-800 text-white shadow-xs'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <History className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>History</span>
+                  {savedDocuments.length > 0 && (
+                    <span className="w-4 h-4 rounded-full bg-slate-700 text-[10px] flex items-center justify-center text-slate-300 font-mono">
+                      {savedDocuments.length}
+                    </span>
+                  )}
+                </button>
+              </div>
+
+              {/* Sub-Tab: Active Document Overview */}
+              {overviewSubTab === 'overview' && (
+                <div className="space-y-5 divide-y divide-slate-800/60">
               {/* Document Overview Metadata Header */}
               <div className="space-y-2 pb-2">
                 <div className="flex items-center gap-2 flex-wrap">
@@ -451,6 +564,118 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = ({
               </div>
             </div>
           )}
+
+          {/* Sub-Tab 2: Sample Library */}
+          {overviewSubTab === 'samples' && (
+            <div className="space-y-3">
+              <div className="pb-1">
+                <h3 className="text-sm font-bold text-slate-200">Sample Library</h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Curated readings designed to benchmark your RSVP speed and focus stamina:
+                </p>
+              </div>
+              <div className="grid grid-cols-1 gap-2.5">
+                {SAMPLE_TEXTS.map((sample) => (
+                  <div
+                    key={sample.id}
+                    onClick={() => handleSelectSample(sample)}
+                    className="group p-3.5 rounded-xl bg-slate-900/60 hover:bg-slate-800/80 border border-slate-800 hover:border-slate-700 transition-all cursor-pointer flex flex-col justify-between"
+                  >
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-xs font-semibold text-slate-200 group-hover:text-red-400 transition-colors">
+                          {sample.title}
+                        </span>
+                        {sample.category && (
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 font-medium">
+                            {sample.category}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-slate-400 line-clamp-2 leading-relaxed">
+                        {sample.text}
+                      </p>
+                    </div>
+                    <div className="flex items-center justify-between mt-2.5 pt-2 border-t border-slate-800/60 text-[11px] text-slate-500">
+                      <span>{sample.wordCount} words</span>
+                      <span className="text-red-400 font-medium group-hover:underline">
+                        Load & Read →
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Sub-Tab 3: History */}
+          {overviewSubTab === 'history' && (
+            <div className="space-y-3">
+              <div className="pb-1">
+                <h3 className="text-sm font-bold text-slate-200">Reading History</h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Previously opened documents and reading sessions:
+                </p>
+              </div>
+              {savedDocuments.length === 0 ? (
+                <div className="p-8 text-center rounded-2xl bg-slate-900/40 border border-slate-800">
+                  <History className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+                  <p className="text-sm font-medium text-slate-400">No reading history yet</p>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Documents you import and read will be automatically saved here for easy resumption.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {savedDocuments.map((doc) => (
+                    <div
+                      key={doc.id}
+                      className="p-3.5 rounded-xl bg-slate-900/60 border border-slate-800 hover:border-slate-700 flex items-center justify-between group transition-all"
+                    >
+                      <div
+                        onClick={() => handleSelectHistory(doc)}
+                        className="flex-1 min-w-0 cursor-pointer pr-4"
+                      >
+                        <h4 className="text-xs sm:text-sm font-semibold text-slate-200 group-hover:text-red-400 transition-colors truncate">
+                          {doc.title}
+                        </h4>
+                        <p className="text-[11px] text-slate-400 mt-0.5 flex items-center gap-2">
+                          <span>{doc.wordCount} words</span>
+                          <span>•</span>
+                          <span>{doc.lastReadDate}</span>
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleSelectHistory(doc)}
+                          className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 transition-colors"
+                        >
+                          Read
+                        </button>
+                        {onDeleteDocument && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDeleteDocument(doc.id);
+                            }}
+                            className="p-1.5 text-slate-500 hover:text-red-400 rounded-lg hover:bg-slate-800 transition-colors"
+                            title="Remove from history"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
           {/* TAB 2: Universal Text Input Hub */}
           {activeTab === 'input' && (

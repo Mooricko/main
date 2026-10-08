@@ -5,13 +5,9 @@ import {
   Clock, 
   FileText, 
   ArrowRight, 
-  BookOpen, 
-  History, 
   Layers, 
-  Trash2, 
   Check, 
-  AlertCircle,
-  Zap
+  AlertCircle
 } from 'lucide-react';
 import { ReaderSettings, ReaderDocument, SavedDocument, ImportState } from '../../types';
 import { DropZone } from './DropZone';
@@ -22,8 +18,6 @@ import { isUrlString, isMarkdownString } from '../../services/import/detectInput
 import { calculateTextStats, isRtlText } from '../../utils/textParser';
 import { classifyDocumentScale } from '../../utils/performanceDiagnostics';
 import { HIGHLIGHT_COLORS, THEME_CONFIGS } from '../../utils/themeStyles';
-import { SAMPLE_TEXTS } from '../../data/sampleTexts';
-import { documentStorageService } from '../../services/document/documentStorageService';
 import { workerProcessingService } from '../../services/worker/workerProcessingService';
 
 interface InputHubProps {
@@ -51,7 +45,6 @@ export const InputHub: React.FC<InputHubProps> = ({
   initialDroppedFile,
   onClearDroppedFile,
 }) => {
-  const [activeTab, setActiveTab] = useState<'hub' | 'samples' | 'history'>('hub');
   const [pastedText, setPastedText] = useState(currentText);
   const [docTitle, setDocTitle] = useState(currentTitle);
   const [importState, setImportState] = useState<ImportState>({ stage: 'idle' });
@@ -296,125 +289,13 @@ export const InputHub: React.FC<InputHubProps> = ({
     handleProcessInput(pastedText, isDetectedMarkdown ? 'markdown' : 'text');
   };
 
-  // Samples selection
-  const handleSelectSample = (sample: SavedDocument) => {
-    const text = sample.text || '';
-    const doc: ReaderDocument = {
-      id: sample.id,
-      sourceType: sample.sourceType || 'text',
-      title: sample.title,
-      content: text,
-      direction: sample.direction || (isRtlText(text) ? 'rtl' : 'ltr'),
-      metadata: {
-        wordCount: sample.wordCount,
-      },
-    };
-    onImportDocument(doc);
-    onClose?.();
-  };
-
-  // History selection - loads full document text asynchronously if not in memory
-  const handleSelectHistory = async (historyItem: SavedDocument) => {
-    let content = historyItem.text;
-    if (!content) {
-      const dbText = await documentStorageService.getDocumentText(historyItem.id);
-      if (dbText) {
-        content = dbText;
-      }
-    }
-    if (!content) {
-      const sample = SAMPLE_TEXTS.find((s) => s.id === historyItem.id);
-      if (sample && sample.text) {
-        content = sample.text;
-      }
-    }
-    if (!content) {
-      console.warn(`[InputHub] Could not load text for history document ${historyItem.id}`);
-      return;
-    }
-
-    const doc: ReaderDocument = {
-      id: historyItem.id,
-      sourceType: historyItem.sourceType || 'text',
-      title: historyItem.title,
-      content,
-      direction: historyItem.direction || (isRtlText(content) ? 'rtl' : 'ltr'),
-      metadata: {
-        wordCount: historyItem.wordCount,
-      },
-    };
-    onImportDocument(doc);
-    onClose?.();
-  };
-
   const isProcessing = ['detecting', 'reading', 'extracting', 'preparing'].includes(importState.stage);
 
   return (
     <div id="universal-text-input-hub" className="flex flex-col h-full max-h-[85vh] text-slate-200">
-      {/* Navigation Tabs */}
-      <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-4 shrink-0">
-        <div className="flex items-center gap-1.5 p-1 bg-slate-900/80 rounded-xl border border-slate-800">
-          <button
-            type="button"
-            onClick={() => setActiveTab('hub')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-              activeTab === 'hub'
-                ? 'bg-slate-800 text-white shadow-sm'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Sparkles className="w-3.5 h-3.5 text-red-400" />
-            <span>Universal Input Hub</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab('samples')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-              activeTab === 'samples'
-                ? 'bg-slate-800 text-white shadow-sm'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <BookOpen className="w-3.5 h-3.5 text-blue-400" />
-            <span>Sample Library</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab('history')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all relative ${
-              activeTab === 'history'
-                ? 'bg-slate-800 text-white shadow-sm'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <History className="w-3.5 h-3.5 text-emerald-400" />
-            <span>History</span>
-            {savedDocuments.length > 0 && (
-              <span className="w-4 h-4 rounded-full bg-slate-700 text-[10px] flex items-center justify-center text-slate-300 font-mono">
-                {savedDocuments.length}
-              </span>
-            )}
-          </button>
-        </div>
-
-        {onOpenExtensionHub && (
-          <button
-            type="button"
-            onClick={onOpenExtensionHub}
-            className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-950/40 hover:bg-red-900/50 border border-red-800/60 text-red-300 text-xs font-medium transition-colors"
-          >
-            <Zap className="w-3.5 h-3.5 text-red-400 fill-red-400" />
-            <span>Web Capture Extension</span>
-          </button>
-        )}
-      </div>
-
-      {/* Main Tab Content */}
+      {/* Main Input Content */}
       <div className="flex-1 overflow-y-auto pr-1 space-y-4">
-        {activeTab === 'hub' && (
-          <div className="space-y-4">
+        <div className="space-y-4">
             {/* Status / Error Banner */}
             <ImportStatus
               state={importState}
@@ -560,113 +441,10 @@ export const InputHub: React.FC<InputHubProps> = ({
               </div>
             </div>
           </div>
-        )}
-
-        {/* Samples Library Tab */}
-        {activeTab === 'samples' && (
-          <div className="space-y-3">
-            <p className="text-xs text-slate-400">
-              Curated readings designed to benchmark your RSVP speed and focus stamina:
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {SAMPLE_TEXTS.map((sample) => (
-                <div
-                  key={sample.id}
-                  onClick={() => handleSelectSample(sample)}
-                  className="group p-4 rounded-xl bg-slate-900/60 hover:bg-slate-800/80 border border-slate-800 hover:border-slate-700 transition-all cursor-pointer flex flex-col justify-between"
-                >
-                  <div>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <span className="text-xs font-semibold text-slate-300 group-hover:text-red-400 transition-colors">
-                        {sample.title}
-                      </span>
-                      {sample.category && (
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 font-medium">
-                          {sample.category}
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-xs text-slate-400 line-clamp-2 leading-relaxed">
-                      {sample.text}
-                    </p>
-                  </div>
-                  <div className="flex items-center justify-between mt-3 pt-2 border-t border-slate-800/60 text-[11px] text-slate-500">
-                    <span>{sample.wordCount} words</span>
-                    <span className="text-red-400 font-medium group-hover:underline">
-                      Load & Read →
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* History Tab */}
-        {activeTab === 'history' && (
-          <div className="space-y-3">
-            {savedDocuments.length === 0 ? (
-              <div className="p-8 text-center rounded-2xl bg-slate-900/40 border border-slate-800">
-                <History className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-                <p className="text-sm font-medium text-slate-400">No reading history yet</p>
-                <p className="text-xs text-slate-500 mt-1">
-                  Documents you import and read will be automatically saved here for easy resumption.
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {savedDocuments.map((doc) => (
-                  <div
-                    key={doc.id}
-                    className="p-3.5 rounded-xl bg-slate-900/60 border border-slate-800 hover:border-slate-700 flex items-center justify-between group transition-all"
-                  >
-                    <div
-                      onClick={() => handleSelectHistory(doc)}
-                      className="flex-1 min-w-0 cursor-pointer pr-4"
-                    >
-                      <h4 className="text-xs sm:text-sm font-semibold text-slate-200 group-hover:text-red-400 transition-colors truncate">
-                        {doc.title}
-                      </h4>
-                      <p className="text-[11px] text-slate-400 mt-0.5 flex items-center gap-2">
-                        <span>{doc.wordCount} words</span>
-                        <span>•</span>
-                        <span>{doc.lastReadDate}</span>
-                      </p>
-                    </div>
-
-                    <div className="flex items-center gap-2 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => handleSelectHistory(doc)}
-                        className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 transition-colors"
-                      >
-                        Read
-                      </button>
-                      {onDeleteDocument && (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onDeleteDocument(doc.id);
-                          }}
-                          className="p-1.5 text-slate-500 hover:text-red-400 rounded-lg hover:bg-slate-800 transition-colors"
-                          title="Remove from history"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
       </div>
 
       {/* Footer Controls */}
-      {activeTab === 'hub' && (
-        <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between shrink-0">
+      <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between shrink-0">
           <div className="text-xs text-slate-500 flex items-center gap-3">
             <span>Supports: TXT, MD, PDF, URL, Paste</span>
           </div>
@@ -701,7 +479,6 @@ export const InputHub: React.FC<InputHubProps> = ({
             </button>
           </div>
         </div>
-      )}
     </div>
   );
 };
