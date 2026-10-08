@@ -297,7 +297,7 @@
   transform: translateZ(25px);
 }
 
-/* Subtle slide-in and fade-in entrance animation for Extension Hub modal container */
+/* Subtle slide-in and fade-in entrance animation for modal containers (Extension Hub, Stats, Timer) */
 @keyframes modalSlideFadeIn {
   0% {
     opacity: 0;

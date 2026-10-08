@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   X, 
   Play, 
@@ -60,6 +60,31 @@ export const FocusTimerModal: React.FC<FocusTimerModalProps> = ({
   highlightHex,
 }) => {
   const [customMinutes, setCustomMinutes] = useState<number>(15);
+  const modalRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handlePointerDown = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as HTMLElement;
+      if (
+        target?.closest?.('#open-timer-modal-btn') ||
+        target?.closest?.('#drawer-open-timer-btn')
+      ) {
+        return;
+      }
+      if (modalRef.current && !modalRef.current.contains(target as Node)) {
+        onClose();
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('touchstart', handlePointerDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('touchstart', handlePointerDown);
+    };
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
@@ -72,10 +97,20 @@ export const FocusTimerModal: React.FC<FocusTimerModalProps> = ({
     : 0;
 
   return (
-    <div className="fixed inset-0 z-50 overflow-hidden bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-200">
+    <div 
+      id="focus-timer-modal-backdrop"
+      className="fixed inset-0 z-50 overflow-hidden bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-200"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          onClose();
+        }
+      }}
+    >
       <div 
         id="focus-timer-modal"
-        className={`w-full max-w-md ${theme.cardBgClass} border ${theme.borderClass} rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-200`}
+        ref={modalRef}
+        onClick={(e) => e.stopPropagation()}
+        className={`w-full max-w-md ${theme.cardBgClass} border ${theme.borderClass} rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-modal-slide-fade`}
       >
         {/* Modal Header */}
         <div className={`flex items-center justify-between px-5 py-4 border-b ${theme.borderClass}`}>

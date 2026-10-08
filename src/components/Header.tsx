@@ -174,8 +174,8 @@ export const Header: React.FC<HeaderProps> = ({
             id="open-settings-btn"
             type="button"
             onClick={onOpenSettings}
-            title="Reader Customization & Typography"
-            aria-label="Open Settings"
+            title="Settings"
+            aria-label="Settings"
             className={`p-2 rounded-lg border ${theme.borderClass} ${theme.textMuted} hover:${theme.textPrimary} hover:${theme.accentSurface} transition-colors`}
           >
             <Settings className="w-4 h-4" />

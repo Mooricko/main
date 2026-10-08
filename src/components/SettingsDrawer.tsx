@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   X, 
   Type, 
@@ -91,15 +91,52 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
     }, 2800);
   };
 
-  if (!isOpen) return null;
+  const drawerRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handlePointerDown = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as HTMLElement;
+      if (target?.closest?.('#open-settings-btn')) return;
+
+      if (drawerRef.current && !drawerRef.current.contains(target as Node)) {
+        onClose();
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('touchstart', handlePointerDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('touchstart', handlePointerDown);
+    };
+  }, [isOpen, onClose]);
 
   const theme = THEME_CONFIGS[settings.theme];
   const highlight = HIGHLIGHT_COLORS[settings.highlightColor];
 
   return (
-    <div className="fixed inset-0 z-50 overflow-hidden bg-black/60 backdrop-blur-xs flex justify-end animate-in fade-in duration-200">
-      <div 
-        className={`w-full max-w-md h-full ${theme.cardBgClass} border-l ${theme.borderClass} shadow-2xl flex flex-col justify-between overflow-y-auto animate-in slide-in-from-right duration-300`}
+    <>
+      {/* 1. Backdrop Overlay */}
+      {isOpen && (
+        <div 
+          id="settings-drawer-backdrop"
+          onClick={onClose}
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs transition-opacity duration-300 animate-in fade-in"
+          aria-hidden="true"
+        />
+      )}
+
+      {/* 2. Settings Sidebar Container */}
+      <aside
+        id="settings-drawer"
+        ref={drawerRef}
+        className={`fixed inset-y-0 right-0 z-50 w-full sm:w-[480px] md:w-[520px] max-w-[95vw] flex flex-col justify-between ${theme.cardBgClass} border-l ${theme.borderClass} shadow-2xl transition-all duration-300 ease-out ${
+          isOpen ? 'translate-x-0 opacity-100 pointer-events-auto' : 'translate-x-full opacity-0 pointer-events-none'
+        }`}
+        aria-label="Settings Sidebar"
+        aria-hidden={!isOpen}
       >
         {/* Header */}
         <div className={`flex items-center justify-between px-6 py-4 border-b ${theme.borderClass}`}>
@@ -1158,7 +1195,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
             Done
           </button>
         </div>
-      </div>
-    </div>
+      </aside>
+    </>
   );
 };
