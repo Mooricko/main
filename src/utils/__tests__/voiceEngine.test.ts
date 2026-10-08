@@ -122,7 +122,6 @@ const mockSettings: ReaderSettings = {
   showReticleGuides: true,
   showContextWords: false,
   opticalCenterLock: true,
-  morphTransition: true,
   speechNarration: true,
   speechVoiceURI: '',
   speechPitch: 1.0,

@@ -549,8 +549,8 @@ export const FlowReader: React.FC<FlowReaderProps> = ({
               id="flow-font-decrease-btn"
               type="button"
               onClick={() => onUpdateSettings({ flowFontSize: Math.max(14, (settings.flowFontSize || 22) - 2) })}
-              title="Decrease word size (A-)"
-              aria-label="Decrease word size"
+              title="Decrease word size (-)"
+              aria-label="Decrease word size (-)"
               className={`px-2 py-0.5 rounded font-semibold ${theme.textMuted} hover:${theme.textPrimary} hover:${theme.accentSurface} transition-colors`}
             >
               A-
@@ -562,8 +562,8 @@ export const FlowReader: React.FC<FlowReaderProps> = ({
               id="flow-font-increase-btn"
               type="button"
               onClick={() => onUpdateSettings({ flowFontSize: Math.min(52, (settings.flowFontSize || 22) + 2) })}
-              title="Increase word size (A+)"
-              aria-label="Increase word size"
+              title="Increase word size (+)"
+              aria-label="Increase word size (+)"
               className={`px-2 py-0.5 rounded font-semibold ${theme.textMuted} hover:${theme.textPrimary} hover:${theme.accentSurface} transition-colors`}
             >
               A+

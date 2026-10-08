@@ -16,7 +16,6 @@ import {
   Volume2,
   VolumeX,
   Headphones,
-  Sparkles,
   Flame,
   MoveHorizontal
 } from 'lucide-react';
@@ -29,7 +28,7 @@ import { precalculateDriftOffsets } from '../utils/driftAnimation';
 import { metronome } from '../utils/audioMetronome';
 import { speechNarrator } from '../utils/speechNarration';
 import { SpeedSliderToggle } from './SpeedSliderToggle';
-import { RSVPMorphWord } from './RSVPMorphWord';
+import { RSVPWordDisplay } from './RSVPWordDisplay';
 import { MetallicButton } from './MetallicButton';
 import { ReadingHeatmapProgress } from './ReadingHeatmapProgress';
 import { AutoPauseReason } from '../hooks/useSmartAutoPause';
@@ -449,7 +448,7 @@ export const RSVPReader: React.FC<RSVPReaderProps> = ({
           </span>
         </div>
 
-        {/* Word Size, Words per flash, Morph Toggle & Speed */}
+        {/* Word Size, Words per flash, Smart Pace & Speed */}
         <div className="flex items-center gap-2">
           {/* Words per Flash (1, 3, 5 words in RSVP mode) */}
           <div 
@@ -485,8 +484,8 @@ export const RSVPReader: React.FC<RSVPReaderProps> = ({
               id="rsvp-font-decrease-btn"
               type="button"
               onClick={() => onUpdateSettings({ fontSize: Math.max(28, settings.fontSize - 4) })}
-              title="Decrease word size (A-)"
-              aria-label="Decrease word size"
+              title="Decrease word size (-)"
+              aria-label="Decrease word size (-)"
               className={`px-2 py-0.5 rounded font-semibold ${theme.textMuted} hover:${theme.textPrimary} hover:${theme.accentSurface} transition-colors`}
             >
               A-
@@ -498,42 +497,13 @@ export const RSVPReader: React.FC<RSVPReaderProps> = ({
               id="rsvp-font-increase-btn"
               type="button"
               onClick={() => onUpdateSettings({ fontSize: Math.min(100, settings.fontSize + 4) })}
-              title="Increase word size (A+)"
-              aria-label="Increase word size"
+              title="Increase word size (+)"
+              aria-label="Increase word size (+)"
               className={`px-2 py-0.5 rounded font-semibold ${theme.textMuted} hover:${theme.textPrimary} hover:${theme.accentSurface} transition-colors`}
             >
               A+
             </button>
           </div>
-
-          <button
-            id="toggle-morph-transition-btn"
-            type="button"
-            onClick={() => onUpdateSettings({ morphTransition: !settings.morphTransition })}
-            title={
-              settings.morphTransition
-                ? 'Liquid Text Morph Transition: ON (Click to toggle)'
-                : 'Liquid Text Morph Transition: OFF (Click to toggle)'
-            }
-            aria-label="Toggle Liquid Morph Transition"
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs font-mono transition-all ${
-              settings.morphTransition
-                ? 'font-bold shadow-xs'
-                : `${theme.borderClass} ${theme.textMuted} opacity-70 hover:opacity-100`
-            }`}
-            style={
-              settings.morphTransition
-                ? {
-                    borderColor: `${highlight.hex}60`,
-                    color: highlight.hex,
-                    backgroundColor: `${highlight.hex}18`,
-                  }
-                : undefined
-            }
-          >
-            <Sparkles className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Morph</span>
-          </button>
 
           {/* Smart Pace Quick Toggle */}
           <button
@@ -731,8 +701,8 @@ export const RSVPReader: React.FC<RSVPReaderProps> = ({
               </div>
             )}
 
-            {/* Word Display Box with Liquid Text Morph Transition & Vertical Looping Reel */}
-            <RSVPMorphWord
+            {/* RSVP Word Display Box */}
+            <RSVPWordDisplay
               currentWord={currentWord}
               currentIndex={currentIndex}
               allWords={words}

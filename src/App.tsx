@@ -72,7 +72,6 @@ const DEFAULT_SETTINGS: ReaderSettings = {
   showReticleGuides: true,
   showContextWords: false,
   opticalCenterLock: true,
-  morphTransition: true,
   speechNarration: false,
   speechVoiceURI: '',
   speechPitch: 1.0,
@@ -1009,6 +1008,39 @@ export default function App() {
         return;
       }
 
+      // Incremental font size adjustments during RSVP or Full Text Flow playback (- to decrease, + or = to increase)
+      if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (e.key === '-' || e.code === 'Minus' || e.code === 'NumpadSubtract') {
+          e.preventDefault();
+          if (viewMode === 'flow') {
+            const currentFlowSize = settings.flowFontSize || 22;
+            const nextSize = Math.max(14, currentFlowSize - 2);
+            handleUpdateSettings({ flowFontSize: nextSize });
+            showToast(`🔤 Flow Font Size: ${nextSize}px`);
+          } else {
+            const nextSize = Math.max(20, settings.fontSize - 4);
+            handleUpdateSettings({ fontSize: nextSize });
+            showToast(`🔤 Font Size: ${nextSize}px`);
+          }
+          return;
+        }
+
+        if (e.key === '+' || e.key === '=' || e.code === 'NumpadAdd' || (e.shiftKey && e.code === 'Equal')) {
+          e.preventDefault();
+          if (viewMode === 'flow') {
+            const currentFlowSize = settings.flowFontSize || 22;
+            const nextSize = Math.min(52, currentFlowSize + 2);
+            handleUpdateSettings({ flowFontSize: nextSize });
+            showToast(`🔤 Flow Font Size: ${nextSize}px`);
+          } else {
+            const nextSize = Math.min(100, settings.fontSize + 4);
+            handleUpdateSettings({ fontSize: nextSize });
+            showToast(`🔤 Font Size: ${nextSize}px`);
+          }
+          return;
+        }
+      }
+
       if (e.code === 'Space') {
         e.preventDefault();
         handleTogglePlay();
@@ -1068,6 +1100,9 @@ export default function App() {
     settings.metronomeSound, 
     settings.speechNarration, 
     settings.theme, 
+    settings.fontSize,
+    settings.flowFontSize,
+    viewMode,
     totalWords, 
     currentIndex, 
     handleUpdateSettings, 

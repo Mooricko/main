@@ -27,6 +27,8 @@ export const KeyboardShortcutsModal: React.FC<KeyboardShortcutsModalProps> = ({
     { key: '→ Right Arrow', desc: 'Jump forward 10 words' },
     { key: '↑ Up Arrow', desc: 'Increase reading speed (+25 WPM)' },
     { key: '↓ Down Arrow', desc: 'Decrease reading speed (-25 WPM)' },
+    { key: '+ or =', desc: 'Increase font size (RSVP & Full Text Flow mode)' },
+    { key: '-', desc: 'Decrease font size (RSVP & Full Text Flow mode)' },
     { key: 'R', desc: 'Restart reading from the beginning' },
     { key: 'F', desc: 'Toggle Fullscreen distraction-free mode' },
     { key: 'M', desc: 'Switch between RSVP and Full Text Flow mode' },
