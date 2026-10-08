@@ -297,6 +297,31 @@
   transform: translateZ(25px);
 }
 
+/* Subtle slide-in and fade-in entrance animation for Extension Hub modal container */
+@keyframes modalSlideFadeIn {
+  0% {
+    opacity: 0;
+    transform: translateY(14px) scale(0.985);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-modal-slide-fade {
+  animation: modalSlideFadeIn 0.28s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: transform, opacity;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-modal-slide-fade {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
+
 
 
 

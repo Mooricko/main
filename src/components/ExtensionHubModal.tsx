@@ -171,7 +171,7 @@ export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-xs animate-in fade-in duration-200">
       <div 
         id="extension-hub-modal"
-        className={`w-full max-w-3xl rounded-2xl border ${theme.borderClass} ${theme.cardBgClass} shadow-2xl flex flex-col max-h-[92vh] overflow-hidden`}
+        className={`w-full max-w-3xl h-[640px] max-h-[90vh] rounded-2xl border ${theme.borderClass} ${theme.cardBgClass} shadow-2xl flex flex-col overflow-hidden animate-modal-slide-fade`}
       >
         {/* Modal Header */}
         <div className={`flex items-center justify-between px-5 sm:px-6 py-4 border-b ${theme.borderClass}`}>
@@ -279,7 +279,7 @@ export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
         </div>
 
         {/* Modal Body */}
-        <div className="p-5 sm:p-6 overflow-y-auto flex-1 space-y-4">
+        <div className="p-5 sm:p-6 overflow-y-auto flex-1 min-h-0 space-y-4">
           {/* TAB 0: KEYBOARD SHORTCUTS */}
           {activeTab === 'shortcuts' && (
             <div className="space-y-4 animate-in fade-in duration-150">
@@ -507,7 +507,7 @@ export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
 
           {/* TAB 3: MANIFEST & SCRIPTS CODE VIEWER */}
           {activeTab === 'files' && (
-            <div className="space-y-3">
+            <div className="space-y-3 animate-in fade-in duration-150">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <button
