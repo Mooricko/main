@@ -5,17 +5,14 @@ import {
   Maximize2, 
   Minimize2, 
   Sparkles, 
-  HelpCircle,
   Eye,
   AlignLeft,
-  Puzzle,
   Zap,
   Sun,
   Moon,
   Timer,
   BellOff,
-  Activity,
-  Keyboard
+  Activity
 } from 'lucide-react';
 import { ReaderSettings, ReaderViewMode } from '../types';
 import { THEME_CONFIGS, HIGHLIGHT_COLORS } from '../utils/themeStyles';
@@ -158,21 +155,18 @@ export const Header: React.FC<HeaderProps> = ({
             )}
           </button>
 
-          {/* Merged Web Capture, Extension & Shortcuts Button */}
+          {/* Help Button */}
           <button
             id="open-extension-hub-btn"
             type="button"
             onClick={onOpenExtensionHub}
-            title="Web Capture, Chrome Extension & Keyboard Shortcuts (?)"
-            aria-label="Web Capture & Keyboard Shortcuts"
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-500/30 bg-red-500/10 hover:bg-red-500/20 text-red-500 transition-colors text-xs font-semibold shadow-xs"
+            title="Help"
+            aria-label="Help"
+            className={`p-2 rounded-lg border ${theme.borderClass} ${theme.textMuted} hover:${theme.textPrimary} hover:${theme.accentSurface} transition-colors flex items-center justify-center`}
           >
-            <div className="flex items-center gap-1">
-              <Puzzle className="w-3.5 h-3.5" />
-              <Keyboard className="w-3 h-3 opacity-70" />
-            </div>
-            <span className="hidden sm:inline">Capture & Shortcuts</span>
-            <span className="sm:hidden">Tools</span>
+            <span className="w-4 h-4 flex items-center justify-center text-xs font-bold leading-none select-none">
+              ?
+            </span>
           </button>
 
           {/* Settings Drawer Button */}

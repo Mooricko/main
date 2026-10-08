@@ -212,7 +212,7 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = ({
           onClick={() => onOpen('overview')}
           title="Open Sources & Text Input Hub"
           aria-label="Open Sources & Text Input Hub"
-          className={`fixed left-0 top-20 z-30 flex items-center gap-2 pl-2.5 pr-3 py-2 rounded-r-xl border-y border-r ${theme.borderClass} ${theme.cardBgClass} ${theme.textPrimary} shadow-xl hover:translate-x-1 active:translate-x-0 transition-all duration-300 backdrop-blur-md group ${
+          className={`fixed left-0 top-20 -mt-[7px] z-30 flex items-center gap-2 pl-2.5 pr-3 py-2 rounded-r-xl border-y border-r ${theme.borderClass} ${theme.cardBgClass} ${theme.textPrimary} shadow-xl hover:translate-x-1 active:translate-x-0 transition-all duration-300 backdrop-blur-md group ${
             isIdle ? 'opacity-0 -translate-x-4 pointer-events-none' : 'opacity-100 translate-x-0'
           }`}
         >
