@@ -1,6 +1,7 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
+import fs from 'fs';
 import {defineConfig} from 'vite';
 import {urlExtractPlugin} from './src/server/urlExtractPlugin';
 
@@ -15,6 +16,27 @@ export default defineConfig(() => {
         configureServer(server) {
           server.middlewares.use((_req, res, next) => {
             res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+            next();
+          });
+        },
+      },
+      {
+        name: 'vite-wasm-mime-plugin',
+        configureServer(server) {
+          server.middlewares.use((req, res, next) => {
+            if (req.url && req.url.split('?')[0].endsWith('.wasm')) {
+              const wasmFileName = path.basename(req.url.split('?')[0]);
+              const ortWasmPath = path.resolve(__dirname, 'node_modules/onnxruntime-web/dist', wasmFileName);
+              if (fs.existsSync(ortWasmPath)) {
+                res.setHeader('Content-Type', 'application/wasm');
+                res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+                return fs.createReadStream(ortWasmPath).pipe(res);
+              }
+              // Prevent returning index.html for missing wasm files
+              res.statusCode = 404;
+              res.setHeader('Content-Type', 'text/plain');
+              return res.end('WASM file not found');
+            }
             next();
           });
         },
@@ -42,6 +64,7 @@ export default defineConfig(() => {
         'gsap',
         'pdfjs-dist',
       ],
+      exclude: ['onnxruntime-web'],
       force: true,
     },
     build: {

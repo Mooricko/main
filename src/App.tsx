@@ -51,6 +51,7 @@ import { documentStorageService } from './services/document/documentStorageServi
 import { createDocumentHandle } from './services/document/documentHandle';
 import { workerProcessingService } from './services/worker/workerProcessingService';
 import { migrateLocalStorageToIndexedDB, DOCUMENT_STORAGE_KEYS } from './services/document/migration';
+import { hasDragDataFromOutside, extractLinkFromDataTransfer } from './services/import/detectInput';
 import { CheckCircle2, Zap, Upload } from 'lucide-react';
 
 const DEFAULT_SETTINGS: ReaderSettings = {
@@ -77,6 +78,9 @@ const DEFAULT_SETTINGS: ReaderSettings = {
   speechPitch: 1.0,
   speechVolume: 1.0,
   speechRateMultiplier: 1.0,
+  farsiTtsEngine: 'espeak',
+  farsiTtsSpeed: 1.0,
+  farsiTtsPitch: 1.0,
   doNotDisturb: false,
   showHeatmapProgress: true,
   smartAutoPause: true,
@@ -418,6 +422,8 @@ export default function App() {
   // 6. Window-level Drag & Drop for Universal Input Hub
   const [isWindowDragging, setIsWindowDragging] = useState(false);
   const [pendingDroppedFile, setPendingDroppedFile] = useState<File | null>(null);
+  const [pendingDroppedUrl, setPendingDroppedUrl] = useState<string | null>(null);
+  const [pendingDroppedText, setPendingDroppedText] = useState<string | null>(null);
   const dragWatchdogRef = useRef<NodeJS.Timeout | null>(null);
 
   const clearWindowDrag = useCallback(() => {
@@ -429,34 +435,37 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const hasFilesInDrag = (e: DragEvent): boolean => {
-      const types = e.dataTransfer?.types;
-      if (!types) return false;
-      return Array.from(types).includes('Files');
-    };
-
     const scheduleWatchdog = () => {
       if (dragWatchdogRef.current) {
         clearTimeout(dragWatchdogRef.current);
       }
-      // Browser fires dragover every ~50ms while a file is actively held over the window;
-      // if no dragover occurs within 200ms, the drag has ended or left the window/iframe.
+      // Browser fires dragover every ~50ms while a file or link is actively held over the window;
+      // if no dragover occurs within 250ms, the drag has ended or left the window/iframe.
       dragWatchdogRef.current = setTimeout(() => {
         setIsWindowDragging(false);
-      }, 200);
+      }, 250);
     };
 
     const handleDragEnter = (e: DragEvent) => {
-      if (!hasFilesInDrag(e)) return;
+      if (!hasDragDataFromOutside(e.dataTransfer)) return;
       e.preventDefault();
       setIsWindowDragging(true);
+      // Automatically open the Universal Input Hub when dragging a file or link from outside
+      setSidebarActiveTab('input');
+      setIsSidebarOpen(true);
       scheduleWatchdog();
     };
 
     const handleDragOver = (e: DragEvent) => {
-      if (!hasFilesInDrag(e)) return;
+      if (!hasDragDataFromOutside(e.dataTransfer)) return;
       e.preventDefault();
+      if (e.dataTransfer) {
+        e.dataTransfer.dropEffect = 'copy';
+      }
       setIsWindowDragging(true);
+      // Ensure Universal Input Hub is open
+      setSidebarActiveTab('input');
+      setIsSidebarOpen(true);
       scheduleWatchdog();
     };
 
@@ -480,15 +489,36 @@ export default function App() {
       e.preventDefault();
       clearWindowDrag();
 
-      const files = e.dataTransfer?.files;
-      if (files && files.length > 0) {
-        const targetEl = e.target as HTMLElement | null;
-        const droppedInsideDropZone = Boolean(targetEl?.closest?.('#universal-dropzone'));
-        if (!droppedInsideDropZone) {
-          setPendingDroppedFile(files[0]);
+      // Ensure Universal Input Hub is open and active
+      setSidebarActiveTab('input');
+      setIsSidebarOpen(true);
+
+      const targetEl = e.target as HTMLElement | null;
+      const droppedInsideDropZone = Boolean(targetEl?.closest?.('#universal-dropzone'));
+
+      // If dropped outside DropZone, handle it here (DropZone handles its own drops):
+      if (!droppedInsideDropZone && e.dataTransfer) {
+        const files = e.dataTransfer.files;
+        if (files && files.length > 0) {
+          const file = files[0];
+          setPendingDroppedFile(file);
+          showToast(`📄 Loaded file "${file.name}" into Universal Input Hub`);
+          return;
         }
-        setSidebarActiveTab('input');
-        setIsSidebarOpen(true);
+
+        const link = extractLinkFromDataTransfer(e.dataTransfer);
+        if (link) {
+          setPendingDroppedUrl(link);
+          showToast(`🔗 Loaded link into Universal Input Hub`);
+          return;
+        }
+
+        const text = e.dataTransfer.getData('text/plain');
+        if (text && text.trim()) {
+          setPendingDroppedText(text.trim());
+          showToast(`📝 Loaded text into Universal Input Hub`);
+          return;
+        }
       }
     };
 
@@ -518,7 +548,7 @@ export default function App() {
       window.removeEventListener('keydown', handleDragEndOrCancel, { capture: true });
       window.removeEventListener('blur', handleDragEndOrCancel);
     };
-  }, [clearWindowDrag]);
+  }, [clearWindowDrag, showToast]);
 
   const handleStartTimer = useCallback((durationMinutes = 15) => {
     const totalSecs = durationMinutes * 60;
@@ -1317,6 +1347,11 @@ export default function App() {
         }}
         initialDroppedFile={pendingDroppedFile}
         onClearDroppedFile={() => setPendingDroppedFile(null)}
+        initialDroppedUrl={pendingDroppedUrl}
+        onClearDroppedUrl={() => setPendingDroppedUrl(null)}
+        initialDroppedText={pendingDroppedText}
+        onClearDroppedText={() => setPendingDroppedText(null)}
+        isWindowDragging={isWindowDragging}
         settings={settings}
         isIdle={isIdle}
       />
@@ -1379,26 +1414,28 @@ export default function App() {
       />
 
       {/* Global Drag & Drop Overlay */}
-      {isWindowDragging && !isSidebarOpen && (
+      {isWindowDragging && (
         <div 
           id="window-drag-overlay"
           onClick={clearWindowDrag}
-          className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex flex-col items-center justify-center p-6 pointer-events-none animate-in fade-in duration-150"
+          className="fixed inset-0 z-40 bg-black/60 backdrop-blur-xs flex flex-col items-center justify-center p-6 pointer-events-none animate-in fade-in duration-150 sm:pl-[500px]"
         >
-          <div className="p-8 rounded-3xl border-2 border-dashed border-red-500 bg-red-500/10 text-center max-w-md shadow-2xl">
-            <div className="w-16 h-16 rounded-2xl bg-red-500 text-white flex items-center justify-center mx-auto mb-4 shadow-lg shadow-red-500/30">
-              <Upload className="w-8 h-8" />
+          <div className="p-7 rounded-3xl border-2 border-dashed border-red-500 bg-red-500/10 text-center max-w-md shadow-2xl backdrop-blur-md">
+            <div className="w-14 h-14 rounded-2xl bg-red-500 text-white flex items-center justify-center mx-auto mb-3 shadow-lg shadow-red-500/30">
+              <Upload className="w-7 h-7" />
             </div>
-            <h2 className="text-xl font-bold text-white mb-2">Drop to Import into Khoroos Reader</h2>
-            <p className="text-sm text-slate-300 mb-4">
-              Release your TXT, Markdown, or PDF document to start reading immediately
+            <h2 className="text-lg font-bold text-white mb-1.5">Drop link or file to import</h2>
+            <p className="text-xs text-slate-300 mb-3">
+              Release anywhere to load directly into the Universal Input Hub
             </p>
-            <div className="flex items-center justify-center gap-3 text-xs font-mono text-slate-400">
+            <div className="flex items-center justify-center gap-2.5 text-[11px] font-mono text-slate-400">
+              <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-300">LINK / URL</span>
+              <span>•</span>
+              <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-300">PDF</span>
+              <span>•</span>
               <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-300">TXT</span>
               <span>•</span>
               <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-300">MD</span>
-              <span>•</span>
-              <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-300">PDF</span>
             </div>
           </div>
         </div>

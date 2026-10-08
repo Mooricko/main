@@ -1,6 +1,7 @@
 import { HighlightedWordParts, ReaderSettings } from '../types';
 import { calculateWordDelayMs, isRtlText } from './textParser';
 import { persianAudioSynth } from './persianSpeechSynth';
+import { farsiOfflineTts } from '../services/tts/farsiOfflineTTS';
 
 export interface VoiceOption {
   name: string;
@@ -193,6 +194,24 @@ class SpeechNarrationService {
         isFarsi: true,
       },
       {
+        name: '🧠 Piper Neural (ONNX Web - امیر fa_IR)',
+        lang: 'fa-IR',
+        voiceURI: 'farsi-piper-neural',
+        default: true,
+        localService: true,
+        provider: 'Piper TTS (ONNX Web - 100% Offline Neural)',
+        isFarsi: true,
+      },
+      {
+        name: '⚡ eSpeak NG (WASM - سبک و سریع)',
+        lang: 'fa-IR',
+        voiceURI: 'farsi-espeak-wasm',
+        default: false,
+        localService: true,
+        provider: 'eSpeak NG WASM (Instant Offline Robotic)',
+        isFarsi: true,
+      },
+      {
         name: 'سنتز گفتار روان فارسی (Persian Web Audio Synth)',
         lang: 'fa-IR',
         voiceURI: 'farsi-webaudio-synth',
@@ -328,6 +347,7 @@ class SpeechNarrationService {
     this.lastReportedWordIndex = -1;
     activeUtterances.clear();
     persianAudioSynth.stop();
+    farsiOfflineTts.stop();
     const synth = this.getSynth();
     if (synth) {
       try {
@@ -362,6 +382,16 @@ class SpeechNarrationService {
     volume: number = 1.0
   ): void {
     this.stop();
+
+    if (voiceURI === 'farsi-piper-neural') {
+      farsiOfflineTts.preview('piper', rate, pitch, volume);
+      return;
+    }
+
+    if (voiceURI === 'farsi-espeak-wasm') {
+      farsiOfflineTts.preview('espeak', rate, pitch, volume);
+      return;
+    }
 
     if (voiceURI === 'farsi-webaudio-synth') {
       persianAudioSynth.preview(pitch, volume);

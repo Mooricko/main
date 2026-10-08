@@ -7,7 +7,8 @@ import {
   ArrowRight, 
   Layers, 
   Check, 
-  AlertCircle
+  AlertCircle,
+  Upload
 } from 'lucide-react';
 import { ReaderSettings, ReaderDocument, SavedDocument, ImportState } from '../../types';
 import { DropZone } from './DropZone';
@@ -24,13 +25,18 @@ interface InputHubProps {
   currentText: string;
   currentTitle: string;
   onImportDocument: (doc: ReaderDocument) => void;
-  savedDocuments: SavedDocument[];
+  savedDocuments?: SavedDocument[];
   onDeleteDocument?: (id: string) => void;
   settings: ReaderSettings;
   onClose?: () => void;
   onOpenExtensionHub?: () => void;
   initialDroppedFile?: File | null;
   onClearDroppedFile?: () => void;
+  initialDroppedUrl?: string | null;
+  onClearDroppedUrl?: () => void;
+  initialDroppedText?: string | null;
+  onClearDroppedText?: () => void;
+  isDraggingOver?: boolean;
 }
 
 export const InputHub: React.FC<InputHubProps> = ({
@@ -44,6 +50,11 @@ export const InputHub: React.FC<InputHubProps> = ({
   onOpenExtensionHub,
   initialDroppedFile,
   onClearDroppedFile,
+  initialDroppedUrl,
+  onClearDroppedUrl,
+  initialDroppedText,
+  onClearDroppedText,
+  isDraggingOver = false,
 }) => {
   const [pastedText, setPastedText] = useState(currentText);
   const [docTitle, setDocTitle] = useState(currentTitle);
@@ -232,6 +243,30 @@ export const InputHub: React.FC<InputHubProps> = ({
     }
   }, [initialDroppedFile]);
 
+  // Automatically process URL dropped from outside the window
+  useEffect(() => {
+    if (initialDroppedUrl) {
+      const urlToProcess = initialDroppedUrl;
+      onClearDroppedUrl?.();
+      setUrlInputValue(urlToProcess);
+      handleImportUrl(urlToProcess);
+    }
+  }, [initialDroppedUrl]);
+
+  // Automatically populate raw text or markdown dropped from outside
+  useEffect(() => {
+    if (initialDroppedText) {
+      const textToProcess = initialDroppedText;
+      onClearDroppedText?.();
+      if (isUrlString(textToProcess)) {
+        setUrlInputValue(textToProcess);
+        handleImportUrl(textToProcess);
+      } else {
+        setPastedText(textToProcess);
+      }
+    }
+  }, [initialDroppedText]);
+
   // URL submitted from URL input or detected
   const handleImportUrl = (url: string, preloadedDoc?: ReaderDocument) => {
     setLastAttemptedUrl(url);
@@ -323,9 +358,18 @@ export const InputHub: React.FC<InputHubProps> = ({
               onDismiss={() => setImportState({ stage: 'idle' })}
             />
 
+            {/* Active Drag-in Highlight Banner */}
+            {isDraggingOver && (
+              <div className="p-3.5 rounded-2xl bg-red-500/15 border-2 border-dashed border-red-500 text-red-200 text-xs font-semibold flex items-center justify-center gap-2.5 animate-pulse shadow-lg shadow-red-500/10">
+                <Upload className="w-4 h-4 text-red-400 shrink-0" />
+                <span>Drop link or file anywhere to load into Universal Input Hub</span>
+              </div>
+            )}
+
             {/* Drop Zone Area */}
             <DropZone
               onFileSelect={handleFileSelect}
+              onUrlSelect={handleImportUrl}
               highlightColor={settings.highlightColor}
               disabled={isProcessing}
             />

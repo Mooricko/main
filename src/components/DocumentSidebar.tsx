@@ -66,6 +66,11 @@ interface DocumentSidebarProps {
   onOpenExtensionHub?: () => void;
   initialDroppedFile?: File | null;
   onClearDroppedFile?: () => void;
+  initialDroppedUrl?: string | null;
+  onClearDroppedUrl?: () => void;
+  initialDroppedText?: string | null;
+  onClearDroppedText?: () => void;
+  isWindowDragging?: boolean;
 
   // General Props
   settings: ReaderSettings;
@@ -94,6 +99,11 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = ({
   onOpenExtensionHub,
   initialDroppedFile,
   onClearDroppedFile,
+  initialDroppedUrl,
+  onClearDroppedUrl,
+  initialDroppedText,
+  onClearDroppedText,
+  isWindowDragging = false,
   settings,
   isIdle = false,
 }) => {
@@ -691,6 +701,11 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = ({
                 onOpenExtensionHub={onOpenExtensionHub}
                 initialDroppedFile={initialDroppedFile}
                 onClearDroppedFile={onClearDroppedFile}
+                initialDroppedUrl={initialDroppedUrl}
+                onClearDroppedUrl={onClearDroppedUrl}
+                initialDroppedText={initialDroppedText}
+                onClearDroppedText={onClearDroppedText}
+                isDraggingOver={isWindowDragging}
               />
             </div>
           )}

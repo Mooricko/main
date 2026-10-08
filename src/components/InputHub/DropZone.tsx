@@ -1,10 +1,12 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Upload, FileText, AlertCircle } from 'lucide-react';
+import { Upload, FileText, AlertCircle, Link2 } from 'lucide-react';
 import { HIGHLIGHT_COLORS } from '../../utils/themeStyles';
 import { HighlightColor } from '../../types';
+import { extractLinkFromDataTransfer } from '../../services/import/detectInput';
 
 interface DropZoneProps {
   onFileSelect: (file: File) => void;
+  onUrlSelect?: (url: string) => void;
   highlightColor: HighlightColor;
   disabled?: boolean;
 }
@@ -13,6 +15,7 @@ const ACCEPTED_EXTENSIONS = ['.txt', '.md', '.markdown', '.pdf'];
 
 export const DropZone: React.FC<DropZoneProps> = ({
   onFileSelect,
+  onUrlSelect,
   highlightColor,
   disabled = false,
 }) => {
@@ -109,12 +112,19 @@ export const DropZone: React.FC<DropZoneProps> = ({
     if (disabled) return;
 
     const files = e.dataTransfer.files;
-    if (!files || files.length === 0) return;
+    if (files && files.length > 0) {
+      const file = files[0];
+      if (validateFile(file)) {
+        onFileSelect(file);
+      }
+      return;
+    }
 
-    // MVP: Single file processing
-    const file = files[0];
-    if (validateFile(file)) {
-      onFileSelect(file);
+    // Handle dropped web link or URL
+    const url = extractLinkFromDataTransfer(e.dataTransfer);
+    if (url && onUrlSelect) {
+      onUrlSelect(url);
+      return;
     }
   };
 
@@ -168,7 +178,7 @@ export const DropZone: React.FC<DropZoneProps> = ({
         </h3>
 
         <p className="pointer-events-none text-xs sm:text-sm text-slate-400 max-w-sm mb-3">
-          Drag & drop files here or{' '}
+          Drag & drop files or link here or{' '}
           <span className={`font-medium underline underline-offset-2 ${highlight.textClass}`}>
             choose from your device
           </span>

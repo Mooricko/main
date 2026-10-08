@@ -58,12 +58,16 @@ async function prepareExtension() {
   fs.writeFileSync(path.join(extDir, 'index.html'), extensionHtml, 'utf8');
   fs.writeFileSync(path.join(distDir, 'index.html'), extensionHtml, 'utf8');
 
-  // 3. Copy manifest, background, content, icons
+  // 3. Copy manifest, background, content, icons, offscreen document & TTS engines
   const filesToCopy = [
     'manifest.json',
     'background.js',
     'content.js',
-    'content.css'
+    'content.css',
+    'offscreen.html',
+    'offscreen.js',
+    'espeak-engine.js',
+    'piper-engine.js'
   ];
 
   for (const file of filesToCopy) {
@@ -116,6 +120,10 @@ How to read highlighted text from any webpage:
   zip.file('background.js', fs.readFileSync(path.join(extDir, 'background.js'), 'utf8'));
   zip.file('content.js', fs.readFileSync(path.join(extDir, 'content.js'), 'utf8'));
   zip.file('content.css', fs.readFileSync(path.join(extDir, 'content.css'), 'utf8'));
+  zip.file('offscreen.html', fs.readFileSync(path.join(extDir, 'offscreen.html'), 'utf8'));
+  zip.file('offscreen.js', fs.readFileSync(path.join(extDir, 'offscreen.js'), 'utf8'));
+  zip.file('espeak-engine.js', fs.readFileSync(path.join(extDir, 'espeak-engine.js'), 'utf8'));
+  zip.file('piper-engine.js', fs.readFileSync(path.join(extDir, 'piper-engine.js'), 'utf8'));
   zip.file('index.html', extensionHtml);
   zip.file('README.txt', readmeText);
 

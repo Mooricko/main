@@ -49,6 +49,9 @@ export interface ReaderSettings {
   speechPitch: number; // 0.5 to 1.5 (default 1.0)
   speechVolume: number; // 0 to 1 (default 1.0)
   speechRateMultiplier: number; // Fine-tuning rate multiplier (0.7 to 1.3, default 1.0)
+  farsiTtsEngine?: 'espeak' | 'piper'; // Dual-engine offline Farsi TTS: eSpeak NG WASM or Piper ONNX
+  farsiTtsSpeed?: number; // 0.5 to 2.0 (default 1.0)
+  farsiTtsPitch?: number; // 0.6 to 1.4 (default 1.0)
   doNotDisturb: boolean; // Turns off all notifications when timer is set
   showHeatmapProgress: boolean; // Visual reading progress indicator with color gradient heatmap for complex sections
   smartAutoPause: boolean; // Auto-pauses RSVP reader when mouse leaves window or window loses focus

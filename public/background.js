@@ -62,13 +62,100 @@ chrome.commands.onCommand.addListener(async (command) => {
   }
 });
 
-// Handle messages from content script
+// ============================================================================
+// OFFSCREEN DOCUMENT PIPELINE FOR OFFLINE FARSI TTS (Piper ONNX & eSpeak WASM)
+// ============================================================================
+const OFFSCREEN_DOCUMENT_PATH = 'offscreen.html';
+let creatingOffscreenPromise = null;
+
+/**
+ * Checks if the offscreen document is already open
+ */
+async function hasOffscreenDocument() {
+  if ('offscreen' in chrome && typeof chrome.offscreen?.hasDocument === 'function') {
+    return await chrome.offscreen.hasDocument();
+  }
+  // Fallback for Chromium versions where hasDocument is not available
+  if ('clients' in self && typeof self.clients?.matchAll === 'function') {
+    const matchedClients = await self.clients.matchAll();
+    return matchedClients.some((c) => c.url.includes(OFFSCREEN_DOCUMENT_PATH));
+  }
+  return false;
+}
+
+/**
+ * Ensures the offscreen document exists to run WASM/AudioContext
+ */
+async function ensureOffscreenDocument() {
+  if (await hasOffscreenDocument()) {
+    return;
+  }
+
+  if (creatingOffscreenPromise) {
+    await creatingOffscreenPromise;
+    return;
+  }
+
+  if ('offscreen' in chrome && typeof chrome.offscreen?.createDocument === 'function') {
+    creatingOffscreenPromise = chrome.offscreen.createDocument({
+      url: OFFSCREEN_DOCUMENT_PATH,
+      reasons: ['AUDIO_PLAYBACK'],
+      justification: 'Synthesize and play offline TTS audio for Farsi.'
+    });
+
+    try {
+      await creatingOffscreenPromise;
+      console.log('✓ Offscreen document created for Farsi TTS audio playback');
+    } catch (err) {
+      console.warn('Failed to create offscreen document:', err);
+    } finally {
+      creatingOffscreenPromise = null;
+    }
+  }
+}
+
+// Handle messages from content script & UI components
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // 1. Text Capture from Webpage
   if (message.action === 'CAPTURE_AND_READ' && message.text) {
     saveCapturedTextAndOpen(message.text, message.title, message.url).then(() => {
       sendResponse({ success: true });
     });
     return true; // async response
+  }
+
+  // 2. Offscreen Document Internal Routing (Ignore messages targeted specifically to offscreen)
+  if (message.target === 'OFFSCREEN_TTS') {
+    return false;
+  }
+
+  // 3. Farsi Offline TTS Actions: SPEAK, STOP, SET_ENGINE, GET_TTS_STATUS, PRECACHE_PIPER
+  if (['SPEAK', 'STOP', 'SET_ENGINE', 'GET_TTS_STATUS', 'PRECACHE_PIPER'].includes(message.action)) {
+    (async () => {
+      try {
+        await ensureOffscreenDocument();
+
+        // Forward to Offscreen Document with explicit target
+        const offscreenPayload = {
+          ...message,
+          target: 'OFFSCREEN_TTS'
+        };
+
+        chrome.runtime.sendMessage(offscreenPayload, (response) => {
+          if (chrome.runtime.lastError) {
+            sendResponse({ 
+              success: false, 
+              error: chrome.runtime.lastError.message 
+            });
+          } else {
+            sendResponse(response || { success: true });
+          }
+        });
+      } catch (err) {
+        sendResponse({ success: false, error: err?.message || String(err) });
+      }
+    })();
+    return true; // Keep message channel open for async response
   }
 });
 

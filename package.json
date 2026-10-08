@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx src/services/import/__tests__/importPipeline.test.ts && tsx src/hooks/__tests__/smartAutoPause.test.ts && tsx src/utils/__tests__/phase1PerformanceAndDiagnostics.test.ts && tsx src/services/document/__tests__/documentStorage.test.ts && tsx src/services/document/__tests__/sentenceAndChunkingParagraphs.test.ts && tsx src/services/structure/__tests__/structureNavigation.test.ts && tsx src/services/worker/__tests__/workerChunkProcessing.test.ts && tsx src/services/worker/__tests__/phase45ScalabilityIntegration.test.ts && tsx src/components/__tests__/flowReaderParagraphs.test.ts"
+    "test": "tsx src/services/import/__tests__/importPipeline.test.ts && tsx src/hooks/__tests__/smartAutoPause.test.ts && tsx src/utils/__tests__/phase1PerformanceAndDiagnostics.test.ts && tsx src/services/document/__tests__/documentStorage.test.ts && tsx src/services/document/__tests__/sentenceAndChunkingParagraphs.test.ts && tsx src/services/structure/__tests__/structureNavigation.test.ts && tsx src/services/worker/__tests__/workerChunkProcessing.test.ts && tsx src/services/worker/__tests__/phase45ScalabilityIntegration.test.ts && tsx src/components/__tests__/flowReaderParagraphs.test.ts && tsx src/services/tts/__tests__/farsiOfflineTTS.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -24,6 +24,7 @@
     "jszip": "^3.10.2",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
+    "onnxruntime-web": "^1.30.0",
     "pdfjs-dist": "^6.3.289",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",

@@ -125,3 +125,69 @@ export function detectInputType(input: File | Blob | string): InputSourceType {
 
   return 'text';
 }
+
+/**
+ * Detects whether a drag event originates from outside the tab/window
+ * (files from OS, URLs from other tabs, dragged links, text snippets).
+ */
+export function hasDragDataFromOutside(dataTransfer: DataTransfer | null): boolean {
+  if (!dataTransfer || !dataTransfer.types) return false;
+  const types = Array.from(dataTransfer.types);
+  if (types.length === 0) return false;
+  return (
+    types.includes('Files') ||
+    types.includes('text/uri-list') ||
+    types.includes('text/plain') ||
+    types.includes('text/html') ||
+    types.includes('text/x-moz-url') ||
+    types.includes('UniformResourceLocator') ||
+    types.includes('Url') ||
+    types.includes('URL')
+  );
+}
+
+/**
+ * Robustly extracts a URL or link from DataTransfer across all browser engines.
+ */
+export function extractLinkFromDataTransfer(dataTransfer: DataTransfer | null): string | null {
+  if (!dataTransfer) return null;
+
+  // 1. Check text/uri-list (standard for dragged links and bookmarks)
+  const uriList = dataTransfer.getData('text/uri-list');
+  if (uriList) {
+    const lines = uriList.split(/[\r\n]+/);
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed && !trimmed.startsWith('#') && isUrlString(trimmed)) {
+        return trimmed;
+      }
+    }
+  }
+
+  // 2. Check direct URL types (Firefox / Safari / Chrome)
+  const directUrl = dataTransfer.getData('URL') || dataTransfer.getData('text/x-moz-url');
+  if (directUrl) {
+    const firstLine = directUrl.split(/[\r\n]+/)[0]?.trim();
+    if (firstLine && isUrlString(firstLine)) {
+      return firstLine;
+    }
+  }
+
+  // 3. Check plain text for standalone URL
+  const plainText = dataTransfer.getData('text/plain')?.trim();
+  if (plainText && isUrlString(plainText)) {
+    return plainText;
+  }
+
+  // 4. Check HTML payload for anchor tag <a href="...">
+  const htmlData = dataTransfer.getData('text/html');
+  if (htmlData) {
+    const match = htmlData.match(/href=["'](https?:\/\/[^"'\s>]+)["']/i);
+    if (match && match[1] && isUrlString(match[1])) {
+      return match[1];
+    }
+  }
+
+  return null;
+}
+

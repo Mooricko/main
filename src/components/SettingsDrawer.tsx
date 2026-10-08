@@ -22,7 +22,14 @@ import {
   BellOff,
   Bell,
   Flame,
-  MoveHorizontal
+  MoveHorizontal,
+  Download,
+  Cpu,
+  Layers,
+  AlertTriangle,
+  CheckCircle2,
+  Trash2,
+  Activity
 } from 'lucide-react';
 import { 
   ReaderSettings, 
@@ -42,6 +49,8 @@ import {
 } from '../utils/themeStyles';
 import { speechNarrator, VoiceOption } from '../utils/speechNarration';
 import { DRIFT_INTENSITY_CONFIGS, DriftIntensity } from '../utils/driftAnimation';
+import { farsiOfflineTts, SAMPLE_FARSI_TEXT } from '../services/tts/farsiOfflineTTS';
+import { PiperCacheInfo } from '../services/tts/types';
 
 interface SettingsDrawerProps {
   isOpen: boolean;
@@ -67,6 +76,72 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
   const [availableVoices, setAvailableVoices] = useState<VoiceOption[]>([]);
   const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
   const isSpeechSupported = speechNarrator.isSupported();
+
+  // Dual-Engine Offline Farsi TTS State
+  const [piperCache, setPiperCache] = useState<PiperCacheInfo>({
+    status: 'not_cached',
+    modelName: 'fa_IR-amir-medium',
+    sizeBytes: 0,
+    downloadProgress: 0,
+    isOfflineReady: false
+  });
+  const [isFarsiPreviewPlaying, setIsFarsiPreviewPlaying] = useState(false);
+  const [farsiTtsNotice, setFarsiTtsNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    const unsub = farsiOfflineTts.subscribePiperCache((info) => {
+      setPiperCache(info);
+    });
+    return unsub;
+  }, []);
+
+  const currentFarsiEngine = settings.farsiTtsEngine || farsiOfflineTts.getActiveEngine();
+
+  const handleSelectFarsiEngine = (engine: 'espeak' | 'piper') => {
+    farsiOfflineTts.setEngine(engine);
+    onUpdateSettings({ farsiTtsEngine: engine });
+    if (engine === 'piper' && !piperCache.isOfflineReady) {
+      setFarsiTtsNotice('⚠️ Piper neural model not yet cached. It will automatically fallback to eSpeak NG WASM until downloaded.');
+    } else {
+      setFarsiTtsNotice(null);
+    }
+  };
+
+  const handleDownloadPiper = async () => {
+    setFarsiTtsNotice('⏳ Downloading Piper Farsi model (100% offline IndexedDB cache)...');
+    const success = await farsiOfflineTts.downloadPiperModel();
+    if (success) {
+      setFarsiTtsNotice('✓ Piper Neural Farsi model cached in IndexedDB. Ready for 100% offline speech!');
+      setTimeout(() => setFarsiTtsNotice(null), 5000);
+    } else {
+      setFarsiTtsNotice('⚠️ Model download failed. Fallback to eSpeak NG WASM active.');
+    }
+  };
+
+  const handleClearPiperCache = async () => {
+    await farsiOfflineTts.clearPiperCache();
+    setFarsiTtsNotice('Piper offline cache cleared.');
+    setTimeout(() => setFarsiTtsNotice(null), 3000);
+  };
+
+  const handleTestFarsiOfflineTts = async () => {
+    setIsFarsiPreviewPlaying(true);
+    try {
+      await farsiOfflineTts.preview(
+        currentFarsiEngine,
+        settings.farsiTtsSpeed || 1.0,
+        settings.farsiTtsPitch || 1.0,
+        settings.speechVolume,
+        (fallbackReason) => {
+          setFarsiTtsNotice(`ℹ️ ${fallbackReason}`);
+        }
+      );
+    } catch (err: any) {
+      setFarsiTtsNotice(`Error: ${err?.message || 'Synthesis failed'}`);
+    } finally {
+      setTimeout(() => setIsFarsiPreviewPlaying(false), 2600);
+    }
+  };
 
   useEffect(() => {
     if (!isSpeechSupported) return;
@@ -1096,6 +1171,204 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                         onChange={(e) => onUpdateSettings({ speechVolume: parseFloat(e.target.value) })}
                         className="w-full h-1.5 rounded-lg appearance-none cursor-pointer bg-slate-700 accent-red-500"
                       />
+                    </div>
+                  </div>
+
+                  {/* Dual-Engine Offline Farsi TTS Panel */}
+                  <div className="p-3.5 rounded-xl border border-red-500/25 bg-red-950/20 space-y-3.5">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Cpu className="w-4 h-4 text-red-400" />
+                        <div>
+                          <div className={`text-xs font-bold ${theme.textPrimary}`}>
+                            موتور گفتار آفلاین فارسی (Offline Farsi TTS)
+                          </div>
+                          <div className={`text-[10px] ${theme.textMuted}`}>
+                            100% بدون اینترنت (Manifest V3 Offscreen & WASM Pipeline)
+                          </div>
+                        </div>
+                      </div>
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-red-500/15 border border-red-500/30 text-red-300 font-semibold">
+                        Dual-Engine
+                      </span>
+                    </div>
+
+                    {/* Engine Selection Toggle Buttons */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleSelectFarsiEngine('espeak')}
+                        className={`p-2.5 rounded-xl border text-left transition-all relative ${
+                          currentFarsiEngine === 'espeak'
+                            ? 'border-red-500 bg-red-500/15 shadow-xs ring-1 ring-red-500/40'
+                            : 'border-white/5 bg-black/20 hover:border-white/10 opacity-75'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                            <Zap className="w-3.5 h-3.5 text-amber-400" />
+                            eSpeak NG (WASM)
+                          </span>
+                          {currentFarsiEngine === 'espeak' && (
+                            <CheckCircle2 className="w-3.5 h-3.5 text-red-400" />
+                          )}
+                        </div>
+                        <p className={`text-[10px] ${theme.textMuted} leading-tight`}>
+                          سریع، فوری و سبک (&lt; 5MB)<br />صدای رباتیک آکوستیک
+                        </p>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleSelectFarsiEngine('piper')}
+                        className={`p-2.5 rounded-xl border text-left transition-all relative ${
+                          currentFarsiEngine === 'piper'
+                            ? 'border-red-500 bg-red-500/15 shadow-xs ring-1 ring-red-500/40'
+                            : 'border-white/5 bg-black/20 hover:border-white/10 opacity-75'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                            <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                            Piper Neural (ONNX)
+                          </span>
+                          {currentFarsiEngine === 'piper' && (
+                            <CheckCircle2 className="w-3.5 h-3.5 text-red-400" />
+                          )}
+                        </div>
+                        <p className={`text-[10px] ${theme.textMuted} leading-tight`}>
+                          طبیعی و عصبی (امیر fa_IR)<br />کیفیت بالا (~25MB)
+                        </p>
+                      </button>
+                    </div>
+
+                    {/* Piper Model Cache & Download Status Card */}
+                    <div className="p-2.5 rounded-lg bg-black/30 border border-white/5 space-y-2">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="font-semibold text-slate-300 flex items-center gap-1.5">
+                          <Layers className="w-3.5 h-3.5 text-slate-400" />
+                          وضعیت مدل هوش مصنوعی (Piper Model)
+                        </span>
+
+                        {piperCache.isOfflineReady ? (
+                          <span className="flex items-center gap-1 text-[10px] font-semibold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/30">
+                            <Check className="w-3 h-3" />
+                            ذخیره در IndexedDB (آماده آفلاین)
+                          </span>
+                        ) : piperCache.status === 'downloading' ? (
+                          <span className="flex items-center gap-1 text-[10px] font-semibold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full border border-amber-500/30">
+                            <Activity className="w-3 h-3 animate-spin" />
+                            دانلود: {piperCache.downloadProgress}%
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-semibold text-slate-400 bg-slate-800 px-2 py-0.5 rounded-full border border-slate-700">
+                            دانلود نشده (فال‌بک فعال)
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Download Progress Bar */}
+                      {piperCache.status === 'downloading' && (
+                        <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+                          <div 
+                            className="bg-red-500 h-full transition-all duration-300"
+                            style={{ width: `${piperCache.downloadProgress}%` }}
+                          />
+                        </div>
+                      )}
+
+                      <div className="flex items-center justify-between pt-1">
+                        {!piperCache.isOfflineReady ? (
+                          <button
+                            type="button"
+                            onClick={handleDownloadPiper}
+                            disabled={piperCache.status === 'downloading'}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white text-[11px] font-bold shadow-xs transition-colors disabled:opacity-50 cursor-pointer"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            <span>{piperCache.status === 'downloading' ? 'در حال دانلود...' : 'دانلود و ذخیره آفلاین مدل (~25MB)'}</span>
+                          </button>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={handleClearPiperCache}
+                              className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-slate-400 hover:text-red-400 border border-white/5 hover:border-red-500/30 transition-colors cursor-pointer"
+                              title="حذف مدل از حافظه محلی برای آزادسازی فضا"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                              <span>پاک‌کردن کش</span>
+                            </button>
+                            <span className="text-[10px] text-slate-400">
+                              حجم: {(piperCache.sizeBytes / (1024 * 1024)).toFixed(1)} MB
+                            </span>
+                          </div>
+                        )}
+
+                        {/* Test Button for Offline Farsi TTS */}
+                        <button
+                          type="button"
+                          onClick={handleTestFarsiOfflineTts}
+                          disabled={isFarsiPreviewPlaying}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-500/40 bg-red-500/10 hover:bg-red-500/20 text-red-300 text-[11px] font-bold transition-all cursor-pointer shadow-xs"
+                        >
+                          <Play className="w-3 h-3 fill-current" />
+                          <span>{isFarsiPreviewPlaying ? 'در حال پخش...' : 'تست گفتار فارسی (Test)'}</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Notice / Feedback Banner */}
+                    {farsiTtsNotice && (
+                      <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-300 text-[11px] leading-relaxed flex items-start gap-1.5">
+                        <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
+                        <span>{farsiTtsNotice}</span>
+                      </div>
+                    )}
+
+                    {/* Farsi Speech Speed & Pitch Sliders */}
+                    <div className="grid grid-cols-2 gap-3 pt-1 border-t border-white/5">
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between text-[11px]">
+                          <span className={`font-semibold ${theme.textMuted}`}>سرعت گفتار فارسی</span>
+                          <span className={`font-mono font-bold ${theme.textPrimary}`}>
+                            {(settings.farsiTtsSpeed || 1.0).toFixed(1)}x
+                          </span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0.6"
+                          max="1.8"
+                          step="0.1"
+                          value={settings.farsiTtsSpeed || 1.0}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value);
+                            onUpdateSettings({ farsiTtsSpeed: val });
+                          }}
+                          className="w-full h-1.5 rounded-lg appearance-none cursor-pointer bg-slate-700 accent-red-500"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between text-[11px]">
+                          <span className={`font-semibold ${theme.textMuted}`}>زیروبمی (Pitch)</span>
+                          <span className={`font-mono font-bold ${theme.textPrimary}`}>
+                            {(settings.farsiTtsPitch || 1.0).toFixed(1)}x
+                          </span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0.7"
+                          max="1.3"
+                          step="0.1"
+                          value={settings.farsiTtsPitch || 1.0}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value);
+                            onUpdateSettings({ farsiTtsPitch: val });
+                          }}
+                          className="w-full h-1.5 rounded-lg appearance-none cursor-pointer bg-slate-700 accent-red-500"
+                        />
+                      </div>
                     </div>
                   </div>
 
