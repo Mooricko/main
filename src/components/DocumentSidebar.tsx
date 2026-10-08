@@ -210,19 +210,16 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = ({
           id="sidebar-toggle-btn"
           type="button"
           onClick={() => onOpen('overview')}
-          title="Open Document Overview & Text Input Sidebar (Press O or Ctrl+O)"
-          aria-label="Open Document Overview & Text Input Sidebar"
+          title="Open Sources & Text Input Hub"
+          aria-label="Open Sources & Text Input Hub"
           className={`fixed left-0 top-20 z-30 flex items-center gap-2 pl-2.5 pr-3 py-2 rounded-r-xl border-y border-r ${theme.borderClass} ${theme.cardBgClass} ${theme.textPrimary} shadow-xl hover:translate-x-1 active:translate-x-0 transition-all duration-300 backdrop-blur-md group ${
             isIdle ? 'opacity-0 -translate-x-4 pointer-events-none' : 'opacity-100 translate-x-0'
           }`}
         >
           <div className="flex items-center gap-1.5">
             <PanelLeftOpen className="w-4 h-4 text-red-500 group-hover:scale-110 transition-transform" />
-            <span className="text-xs font-semibold hidden md:inline">Sidebar</span>
+            <span className="text-xs font-semibold hidden md:inline">Sources</span>
           </div>
-          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-red-500/10 text-red-400 border border-red-500/20 font-bold hidden sm:inline">
-            O
-          </span>
         </button>
       )}
 
