@@ -10,6 +10,11 @@
 (function () {
   'use strict';
 
+  // Mark this context as the offscreen document to prevent remote message recursion
+  if (typeof window !== 'undefined') {
+    window.__IS_OFFSCREEN_DOCUMENT__ = true;
+  }
+
   console.log('⚡ Farsi Offline TTS Offscreen Document Initialized');
 
   const audioEl = document.getElementById('tts-audio-player');
@@ -37,7 +42,7 @@
 
   function broadcastStatus(state, playbackId, error, durationMs, engineUsed) {
     currentLifecycleState = state;
-    isCurrentlySpeaking = (state === 'STARTED' || state === 'PLAYING');
+    isCurrentlySpeaking = (state === 'STARTED' || state === 'SYNTHESIZING' || state === 'PLAYING');
     const payload = {
       target: 'TTS_CLIENT',
       action: 'STATUS_CHANGED',
@@ -57,12 +62,21 @@
     } catch {}
   }
 
-  function stopAllAudio(broadcast = true) {
+  /**
+   * Stops local audio playback resources and resets state without
+   * broadcasting any extension-level messages or triggering recursive STOP calls.
+   */
+  function stopLocalAudioResources() {
     isCurrentlySpeaking = false;
-    currentLifecycleState = 'STOPPED';
+    currentLifecycleState = 'IDLE';
+
     const manager = getManager();
     if (manager) {
-      manager.stop();
+      if (typeof manager.stopLocal === 'function') {
+        manager.stopLocal();
+      } else if (typeof manager.stop === 'function') {
+        manager.stop();
+      }
     }
 
     if (audioEl) {
@@ -82,10 +96,17 @@
       } catch {}
       currentAudioUrl = null;
     }
+  }
 
-    if (broadcast) {
-      broadcastStatus('STOPPED', currentPlaybackId);
-    }
+  /**
+   * Handles an incoming STOP command:
+   * Tears down local audio and broadcasts a single STOPPED event.
+   * Never sends another STOP message back to background.
+   */
+  function handleStopCommand(playbackId) {
+    stopLocalAudioResources();
+    currentLifecycleState = 'STOPPED';
+    broadcastStatus('STOPPED', playbackId ?? currentPlaybackId);
   }
 
   // Central Chrome Extension Message Dispatcher
@@ -115,92 +136,160 @@
         const playbackId = message.playbackId || ++currentPlaybackId;
         currentPlaybackId = playbackId;
 
-        // Reset any prior audio without extra STOPPED broadcast
-        stopAllAudio(false);
-        broadcastStatus('STARTED', playbackId, undefined, undefined, engine);
+        // 1. Locally cancel previous audio without remote STOP messages
+        stopLocalAudioResources();
+
+        // 2. Broadcast initial state
+        currentLifecycleState = 'SYNTHESIZING';
+        broadcastStatus('SYNTHESIZING', playbackId, undefined, undefined, engine);
 
         const manager = getManager();
         if (!manager) {
           isCurrentlySpeaking = false;
-          broadcastStatus('ERROR', playbackId, 'TTS manager bundle not yet initialized', undefined, engine);
-          sendResponse({ success: false, error: 'TTS manager bundle not yet initialized' });
+          currentLifecycleState = 'ERROR';
+          const errMsg = 'TTS manager bundle not yet initialized';
+          broadcastStatus('ERROR', playbackId, errMsg, undefined, engine);
+          sendResponse({ success: false, playbackStarted: false, error: errMsg, playbackId });
           return false;
         }
 
         manager.synthesize(text, { engine, speed, pitch, volume, allowFallback, playbackId })
           .then(async (res) => {
-            // Guard against stale playback if a stop or new utterance occurred while synthesizing
+            // Guard against stale playback if a stop or newer utterance occurred while synthesizing
             if (currentPlaybackId !== playbackId) {
               return;
             }
 
             if (!res.success || !res.wavBlob) {
               isCurrentlySpeaking = false;
+              currentLifecycleState = 'ERROR';
               const errMsg = res.error || 'Synthesis returned no audio';
               broadcastStatus('ERROR', playbackId, errMsg, 0, res.engineUsed);
               sendResponse({
                 success: false,
+                playbackStarted: false,
                 engineUsed: res.engineUsed,
-                error: errMsg
+                error: errMsg,
+                playbackId
               });
               return;
             }
 
-            // Play through dedicated HTML5 Audio element
+            // Create Audio URL and prepare HTML5 Audio element
             currentAudioUrl = URL.createObjectURL(res.wavBlob);
-            if (audioEl) {
-              audioEl.src = currentAudioUrl;
-              audioEl.volume = Math.max(0, Math.min(1, volume));
-
-              audioEl.onplay = () => {
-                if (currentPlaybackId === playbackId) {
-                  broadcastStatus('PLAYING', playbackId, undefined, res.durationMs, res.engineUsed);
-                }
-              };
-
-              audioEl.onended = () => {
-                if (currentPlaybackId === playbackId) {
-                  broadcastStatus('ENDED', playbackId, undefined, res.durationMs, res.engineUsed);
-                  stopAllAudio(false);
-                }
-              };
-
-              audioEl.onerror = () => {
-                if (currentPlaybackId === playbackId) {
-                  broadcastStatus('ERROR', playbackId, 'Audio element playback error', res.durationMs, res.engineUsed);
-                  stopAllAudio(false);
-                }
-              };
-
-              await audioEl.play().catch((playErr) => {
-                console.warn('Offscreen HTML5 play error, audio element might require interaction:', playErr);
-                if (currentPlaybackId === playbackId) {
-                  broadcastStatus('ERROR', playbackId, playErr?.message || 'Audio playback failed', res.durationMs, res.engineUsed);
-                }
+            if (!audioEl) {
+              isCurrentlySpeaking = false;
+              currentLifecycleState = 'ERROR';
+              const errMsg = 'Audio element not found in offscreen document';
+              broadcastStatus('ERROR', playbackId, errMsg, res.durationMs, res.engineUsed);
+              sendResponse({
+                success: false,
+                playbackStarted: false,
+                error: errMsg,
+                playbackId
               });
+              return;
             }
 
-            sendResponse({
-              success: true,
-              engineUsed: res.engineUsed,
-              durationMs: res.durationMs,
-              fallbackTriggered: res.fallbackTriggered ?? false,
-              fallbackReason: res.fallbackReason
-            });
+            audioEl.src = currentAudioUrl;
+            audioEl.volume = Math.max(0, Math.min(1, volume));
+
+            let hasTerminalTransitionFired = false;
+
+            audioEl.onplay = () => {
+              if (currentPlaybackId === playbackId && !hasTerminalTransitionFired) {
+                currentLifecycleState = 'PLAYING';
+                isCurrentlySpeaking = true;
+                broadcastStatus('PLAYING', playbackId, undefined, res.durationMs, res.engineUsed);
+              }
+            };
+
+            audioEl.onended = () => {
+              if (currentPlaybackId === playbackId && !hasTerminalTransitionFired) {
+                hasTerminalTransitionFired = true;
+                currentLifecycleState = 'IDLE';
+                isCurrentlySpeaking = false;
+                broadcastStatus('ENDED', playbackId, undefined, res.durationMs, res.engineUsed);
+                stopLocalAudioResources();
+              }
+            };
+
+            audioEl.onerror = () => {
+              if (currentPlaybackId === playbackId && !hasTerminalTransitionFired) {
+                hasTerminalTransitionFired = true;
+                currentLifecycleState = 'ERROR';
+                isCurrentlySpeaking = false;
+                const errDetail = audioEl.error
+                  ? `Code ${audioEl.error.code}: ${audioEl.error.message || 'playback error'}`
+                  : 'Audio element playback error';
+                broadcastStatus('ERROR', playbackId, errDetail, res.durationMs, res.engineUsed);
+                stopLocalAudioResources();
+              }
+            };
+
+            // Attempt to trigger playback; guard against cancellation
+            if (currentPlaybackId !== playbackId) {
+              stopLocalAudioResources();
+              return;
+            }
+
+            try {
+              await audioEl.play();
+              sendResponse({
+                success: true,
+                playbackStarted: true,
+                engineUsed: res.engineUsed,
+                durationMs: res.durationMs,
+                playbackId,
+                fallbackTriggered: res.fallbackTriggered ?? false,
+                fallbackReason: res.fallbackReason
+              });
+            } catch (playErr) {
+              hasTerminalTransitionFired = true;
+              console.warn('Offscreen HTML5 play error:', playErr);
+              isCurrentlySpeaking = false;
+              currentLifecycleState = 'ERROR';
+              const errMessage = playErr?.name === 'NotAllowedError'
+                ? 'Audio autoplay restricted by browser policy'
+                : (playErr?.message || 'Audio playback failed to start');
+
+              if (currentPlaybackId === playbackId) {
+                broadcastStatus('ERROR', playbackId, errMessage, res.durationMs, res.engineUsed);
+              }
+              stopLocalAudioResources();
+
+              // Explicitly return failure, never false success
+              sendResponse({
+                success: false,
+                playbackStarted: false,
+                error: errMessage,
+                playbackId,
+                engineUsed: res.engineUsed
+              });
+            }
           })
           .catch((err) => {
             console.error('Synthesis failed in offscreen document:', err);
             isCurrentlySpeaking = false;
-            broadcastStatus('ERROR', playbackId, err?.message || 'Synthesis failed', 0, engine);
-            sendResponse({ success: false, error: err?.message || 'Synthesis failed' });
+            currentLifecycleState = 'ERROR';
+            const errMsg = err?.message || 'Synthesis failed';
+            if (currentPlaybackId === playbackId) {
+              broadcastStatus('ERROR', playbackId, errMsg, 0, engine);
+            }
+            sendResponse({
+              success: false,
+              playbackStarted: false,
+              error: errMsg,
+              playbackId
+            });
           });
 
         return true; // Keep response channel open for asynchronous sendResponse
       }
 
       case 'STOP': {
-        stopAllAudio(true);
-        sendResponse({ success: true });
+        handleStopCommand(message.playbackId);
+        sendResponse({ success: true, playbackId: message.playbackId ?? currentPlaybackId });
         return false;
       }
 

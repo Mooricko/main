@@ -82,6 +82,15 @@ export class PiperEngine implements TtsEngine {
     }
   }
 
+  public resetForTesting(): void {
+    this.stop();
+    this.session = null;
+    this.modelConfig = null;
+    this.initPromise = null;
+    this.lastInitError = null;
+    this.isCurrentlySpeaking = false;
+  }
+
   /**
    * Standard initialize method
    */
@@ -92,8 +101,8 @@ export class PiperEngine implements TtsEngine {
   /**
    * Initializes the ONNX session using model cached in IndexedDB
    */
-  public async init(): Promise<boolean> {
-    if (this.session) return true;
+  public init(): Promise<boolean> {
+    if (this.session) return Promise.resolve(true);
     // Share a single in-flight init promise so concurrent callers wait instead of
     // each concluding "not ready" and spuriously triggering the eSpeak fallback.
     if (this.initPromise) return this.initPromise;

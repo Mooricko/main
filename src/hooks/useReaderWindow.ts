@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { HighlightedWordParts, ReaderDocumentHandle, HighlightStyle } from '../types';
 
 export interface UseReaderWindowOptions {

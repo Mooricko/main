@@ -124,10 +124,36 @@ export function validatePiperModelConfig(
   }
 
   // 3. Validate phoneme_id_map
-  if (!config.phoneme_id_map || typeof config.phoneme_id_map !== 'object' || Object.keys(config.phoneme_id_map).length === 0) {
+  if (!config.phoneme_id_map || typeof config.phoneme_id_map !== 'object' || Array.isArray(config.phoneme_id_map)) {
+    return {
+      valid: false,
+      error: 'Model config invalid: phoneme_id_map missing or invalid object'
+    };
+  }
+
+  const mapEntries = Object.entries(config.phoneme_id_map);
+  if (mapEntries.length === 0) {
     return {
       valid: false,
       error: 'Model config invalid: phoneme_id_map missing or empty object'
+    };
+  }
+
+  // Ensure phoneme map values are actually valid symbol IDs (numbers or arrays of numbers)
+  const hasValidMapping = mapEntries.some(([_, val]) => {
+    if (typeof val === 'number') {
+      return Number.isInteger(val) && val >= 0;
+    }
+    if (Array.isArray(val)) {
+      return val.length > 0 && val.every((v) => typeof v === 'number' && Number.isInteger(v) && v >= 0);
+    }
+    return false;
+  });
+
+  if (!hasValidMapping) {
+    return {
+      valid: false,
+      error: 'Model config invalid: phoneme_id_map contains invalid symbol mappings (expected integer IDs)'
     };
   }
 

@@ -40,9 +40,11 @@ export class EspeakEngine implements TtsEngine, FarsiEspeak {
   public readonly engineType = 'espeak' as const;
   public readonly voice = 'fa';
 
-  private readonly sampleRate = 22050;
+  private sampleRate = 22050;
   private isCurrentlySpeaking = false;
   private isInitialized = false;
+  private isDisposed = false;
+  private generation = 0;
   private initPromise: Promise<void> | null = null;
   private cachedWasmBinary: ArrayBuffer | null = null;
   private currentPlaybackHandle: AudioPlaybackHandle | null = null;
@@ -52,11 +54,26 @@ export class EspeakEngine implements TtsEngine, FarsiEspeak {
   }
 
   /**
+   * Reset engine state cleanly for testing
+   */
+  public resetForTesting(): void {
+    this.stop();
+    this.isDisposed = false;
+    this.generation++;
+    this.initPromise = null;
+    this.cachedWasmBinary = null;
+    this.isInitialized = false;
+  }
+
+  /**
    * Initializes the eSpeak NG WebAssembly environment and prefetches wasm assets
    */
   public async initialize(): Promise<void> {
+    if (this.isDisposed) throw new Error('eSpeak NG engine has been disposed');
     if (this.isInitialized) return;
     if (this.initPromise) return this.initPromise;
+
+    const currentGen = ++this.generation;
 
     this.initPromise = (async () => {
       try {
@@ -92,13 +109,22 @@ export class EspeakEngine implements TtsEngine, FarsiEspeak {
           }
         }
 
+        if (this.isDisposed || this.generation !== currentGen) {
+          return;
+        }
+
         // Initialize phonemizer as well so G2P is warm
         await farsiPhonemizer.init();
+
+        if (this.isDisposed || this.generation !== currentGen) {
+          return;
+        }
 
         this.isInitialized = true;
         console.log('✓ Real eSpeak NG WASM Engine initialized successfully (voice: fa)');
       } catch (err) {
         console.error('Failed to initialize eSpeak NG WASM engine:', err);
+        this.isInitialized = false;
         throw err;
       } finally {
         this.initPromise = null;
@@ -333,6 +359,9 @@ export class EspeakEngine implements TtsEngine, FarsiEspeak {
    */
   public dispose(): void {
     this.stop();
+    this.isDisposed = true;
+    this.generation++;
+    this.initPromise = null;
     this.cachedWasmBinary = null;
     this.isInitialized = false;
   }

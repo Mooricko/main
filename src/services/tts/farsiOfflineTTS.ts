@@ -12,7 +12,7 @@
  * - Full standalone in-browser support with IndexedDB caching
  */
 
-import { FarsiTtsEngineType, FarsiTtsOptions, SynthesisResult, PiperCacheInfo, isFarsiTtsEngine, CustomTtsConfig } from './types';
+import { FarsiTtsEngineType, FarsiTtsOptions, SynthesisResult, PiperCacheInfo, isFarsiTtsEngine, CustomTtsConfig, TtsLifecycleState } from './types';
 import { espeakEngine } from './espeakEngine';
 import { piperEngine } from './piperEngine';
 import { customTtsEngine } from './customTtsEngine';
@@ -30,12 +30,46 @@ class FarsiOfflineTtsManager {
   private activeEngine: FarsiTtsEngineType = 'espeak';
   private currentPlayingId: number = 0;
   private isSpeakingActive: boolean = false;
+  private lifecycleState: TtsLifecycleState = 'IDLE';
+  private hasNotifiedStartForCurrent: boolean = false;
+  private hasNotifiedEndForCurrent: boolean = false;
   private activeCallbacks: FarsiTtsOptions | null = null;
   private listeners: Set<() => void> = new Set();
 
   constructor() {
     this.loadSavedSettings();
     this.setupExtensionMessageListener();
+  }
+
+  public getLifecycleState(): TtsLifecycleState {
+    if (this.isSpeaking()) {
+      return this.lifecycleState === 'IDLE' ? 'PLAYING' : this.lifecycleState;
+    }
+    return 'IDLE';
+  }
+
+  public resetForTesting(): void {
+    this.stop();
+    this.currentPlayingId = 0;
+    this.isSpeakingActive = false;
+    this.lifecycleState = 'IDLE';
+    this.hasNotifiedStartForCurrent = false;
+    this.hasNotifiedEndForCurrent = false;
+    this.activeCallbacks = null;
+    if (typeof (espeakEngine as any).resetForTesting === 'function') {
+      (espeakEngine as any).resetForTesting();
+    }
+    if (typeof (piperEngine as any).resetForTesting === 'function') {
+      (piperEngine as any).resetForTesting();
+    }
+  }
+
+  public stopLocal(): void {
+    this.stop();
+  }
+
+  public handleStopMessage(): void {
+    this.stop();
   }
 
   private setupExtensionMessageListener(): void {
@@ -64,20 +98,32 @@ class FarsiOfflineTtsManager {
 
     if (state === 'STARTED' || state === 'PLAYING') {
       this.isSpeakingActive = true;
-      this.activeCallbacks?.onStart?.({ durationMs: msg.durationMs });
+      this.lifecycleState = 'PLAYING';
+      if (!this.hasNotifiedStartForCurrent) {
+        this.hasNotifiedStartForCurrent = true;
+        this.activeCallbacks?.onStart?.({ durationMs: msg.durationMs });
+      }
       this.notify();
     } else if (state === 'ENDED') {
       this.isSpeakingActive = false;
+      this.lifecycleState = 'IDLE';
       const cb = this.activeCallbacks;
       this.activeCallbacks = null;
-      cb?.onEnd?.();
+      if (!this.hasNotifiedEndForCurrent) {
+        this.hasNotifiedEndForCurrent = true;
+        cb?.onEnd?.();
+      }
       this.notify();
     } else if (state === 'STOPPED') {
       this.isSpeakingActive = false;
+      this.lifecycleState = 'IDLE';
+      this.hasNotifiedEndForCurrent = true;
       this.activeCallbacks = null;
       this.notify();
     } else if (state === 'ERROR') {
       this.isSpeakingActive = false;
+      this.lifecycleState = 'IDLE';
+      this.hasNotifiedEndForCurrent = true;
       const cb = this.activeCallbacks;
       this.activeCallbacks = null;
       cb?.onError?.(new Error(error || 'Extension audio playback failed'));
@@ -149,12 +195,19 @@ class FarsiOfflineTtsManager {
    * True when executing inside the offscreen document itself. In that context the manager is driven
    * directly by offscreen.js, so it must NOT send runtime messages (which would loop back into it).
    */
-  public isOffscreenContext(): boolean {
+  public isOffscreenDocumentContext(): boolean {
+    if (typeof (globalThis as any).__IS_OFFSCREEN_DOCUMENT__ !== 'undefined') {
+      return Boolean((globalThis as any).__IS_OFFSCREEN_DOCUMENT__);
+    }
     try {
       return typeof window !== 'undefined' && typeof window.location !== 'undefined' && /offscreen\.html(\?|#|$)/.test(window.location.href);
     } catch {
       return false;
     }
+  }
+
+  public isOffscreenContext(): boolean {
+    return this.isOffscreenDocumentContext();
   }
 
   private sendExtensionMessage(payload: any): Promise<any> {
@@ -200,6 +253,15 @@ class FarsiOfflineTtsManager {
       options.onFallback?.(reason);
 
       const fallbackResult = await espeakEngine.synthesize(text, options);
+      if (!fallbackResult.success) {
+        return {
+          ...fallbackResult,
+          engineUsed: 'espeak',
+          fallbackTriggered: true,
+          fallbackReason: reason,
+          error: `Both Piper and eSpeak fallback failed: (Piper: ${reason}) (eSpeak: ${fallbackResult.error || 'unknown'})`,
+        };
+      }
       return {
         ...fallbackResult,
         engineUsed: 'espeak',
@@ -219,6 +281,15 @@ class FarsiOfflineTtsManager {
       console.warn(`[FarsiOfflineTtsManager] Custom TTS failed (${reason}). Falling back to eSpeak NG WASM.`);
       options.onFallback?.(reason);
       const fallbackResult = await espeakEngine.synthesize(text, options);
+      if (!fallbackResult.success) {
+        return {
+          ...fallbackResult,
+          engineUsed: 'espeak',
+          fallbackTriggered: true,
+          fallbackReason: reason,
+          error: `Both Custom and eSpeak fallback failed: (Custom: ${reason}) (eSpeak: ${fallbackResult.error || 'unknown'})`,
+        };
+      }
       return {
         ...fallbackResult,
         engineUsed: 'espeak',
@@ -240,6 +311,7 @@ class FarsiOfflineTtsManager {
 
     const playbackId = ++this.currentPlayingId;
     this.isSpeakingActive = true;
+    this.lifecycleState = 'PLAYING';
     this.activeCallbacks = options;
     this.notify();
 
@@ -295,6 +367,7 @@ class FarsiOfflineTtsManager {
       onEnd: () => {
         if (this.currentPlayingId === playbackId) {
           this.isSpeakingActive = false;
+          this.lifecycleState = 'IDLE';
           this.activeCallbacks = null;
           this.notify();
           options.onEnd?.();
@@ -303,6 +376,7 @@ class FarsiOfflineTtsManager {
       onError: (err) => {
         if (this.currentPlayingId === playbackId) {
           this.isSpeakingActive = false;
+          this.lifecycleState = 'IDLE';
           this.activeCallbacks = null;
           this.notify();
           options.onError?.(err);
@@ -313,40 +387,49 @@ class FarsiOfflineTtsManager {
       },
     };
 
-    const synthResult = await this.synthesize(text, options);
+    try {
+      const synthResult = await this.synthesize(text, options);
 
-    // A stop() or a newer speak() superseded this utterance while synthesis was running.
-    if (this.currentPlayingId !== playbackId) {
-      return;
+      // A stop() or a newer speak() superseded this utterance while synthesis was running.
+      if (this.currentPlayingId !== playbackId) {
+        return;
+      }
+
+      if (!synthResult.success || !synthResult.wavBlob) {
+        this.isSpeakingActive = false;
+        this.lifecycleState = 'IDLE';
+        this.activeCallbacks = null;
+        this.notify();
+        options.onError?.(new Error(synthResult.error || 'Speech synthesis failed'));
+        return;
+      }
+
+      if (synthResult.fallbackTriggered && synthResult.fallbackReason) {
+        options.onFallback?.(synthResult.fallbackReason);
+      }
+
+      const activeEngineInstance =
+        synthResult.engineUsed === 'piper'
+          ? piperEngine
+          : synthResult.engineUsed === 'custom'
+            ? customTtsEngine
+            : espeakEngine;
+      await activeEngineInstance.playWavBlob(synthResult.wavBlob, wrappedOptions);
+    } catch (err: any) {
+      if (this.currentPlayingId === playbackId) {
+        this.isSpeakingActive = false;
+        this.lifecycleState = 'IDLE';
+        this.activeCallbacks = null;
+        this.notify();
+        options.onError?.(err);
+      }
     }
-
-    if (!synthResult.success || !synthResult.wavBlob) {
-      this.isSpeakingActive = false;
-      this.activeCallbacks = null;
-      this.notify();
-      options.onError?.(new Error(synthResult.error || 'Speech synthesis failed'));
-      return;
-    }
-
-    if (synthResult.fallbackTriggered && synthResult.fallbackReason) {
-      options.onFallback?.(synthResult.fallbackReason);
-    }
-
-    const activeEngineInstance =
-      synthResult.engineUsed === 'piper'
-        ? piperEngine
-        : synthResult.engineUsed === 'custom'
-          ? customTtsEngine
-          : espeakEngine;
-    await activeEngineInstance.playWavBlob(synthResult.wavBlob, wrappedOptions);
   }
 
-  /**
-   * Immediately stops any active audio playback
-   */
-  public stop(): void {
+  public stopLocal(): void {
     this.currentPlayingId++;
     this.isSpeakingActive = false;
+    this.lifecycleState = 'IDLE';
     this.activeCallbacks = null;
 
     // Stop local engines
@@ -354,16 +437,23 @@ class FarsiOfflineTtsManager {
     piperEngine.stop();
     customTtsEngine.stop();
 
-    // Stop extension offscreen audio
-    if (this.isExtensionContext()) {
+    this.notify();
+  }
+
+  /**
+   * Immediately stops any active audio playback
+   */
+  public stop(): void {
+    this.stopLocal();
+
+    // Stop extension offscreen audio (only if not offscreen context itself)
+    if (this.isExtensionContext() && !this.isOffscreenDocumentContext()) {
       this.sendExtensionMessage({
         action: 'STOP',
         type: 'STOP',
         playbackId: this.currentPlayingId
       }).catch(() => {});
     }
-
-    this.notify();
   }
 
   /**

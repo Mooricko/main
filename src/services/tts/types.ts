@@ -37,6 +37,7 @@ export type CustomTtsErrorCategory =
 export type TtsLifecycleState =
   | 'IDLE'
   | 'STARTED'
+  | 'SYNTHESIZING'
   | 'PLAYING'
   | 'ENDED'
   | 'STOPPED'

@@ -11,7 +11,7 @@ import { normalizeFarsiText, farsiTextToPiperTokens } from '../farsiPhonemizer';
 import { encodePcmWav, encodePcmWavBuffer, validateWavBuffer, extractPiperAudioSamples } from '../audioUtils';
 import { validatePiperModelConfig, validatePiperModelBytes } from '../modelValidation';
 import { EspeakEngine, espeakEngine } from '../espeakEngine';
-import { PiperEngine } from '../piperEngine';
+import { PiperEngine, piperEngine } from '../piperEngine';
 import { farsiOfflineTts } from '../farsiOfflineTTS';
 
 console.log('🧪 Starting Phase 3: Unified Dual-Engine Offline Farsi TTS & Real eSpeak NG Tests...');
@@ -742,6 +742,455 @@ describe('11. End-to-End Persian Matrix Test Suite', () => {
       assert.strictEqual(piper.isSpeaking(), false);
     });
   }
+});
+
+describe('12. Phase 5: Extension Lifecycle, Non-Recursive STOP & Idempotent Playback Callbacks', () => {
+  it('stopLocal() cancels local state and does not trigger chrome.runtime.sendMessage', () => {
+    let messageSent = false;
+    const originalChrome = (globalThis as any).chrome;
+    (globalThis as any).chrome = {
+      runtime: {
+        id: 'test-extension-id',
+        sendMessage: () => { messageSent = true; }
+      }
+    };
+
+    try {
+      (farsiOfflineTts as any).isSpeakingActive = true;
+      (farsiOfflineTts as any).currentPlayingId = 500;
+      farsiOfflineTts.stopLocal();
+
+      assert.strictEqual(farsiOfflineTts.isSpeaking(), false);
+      assert.strictEqual(farsiOfflineTts.getLifecycleState(), 'IDLE');
+      assert.strictEqual(messageSent, false, 'stopLocal must NOT send extension messages');
+    } finally {
+      (globalThis as any).chrome = originalChrome;
+    }
+  });
+
+  it('stop() inside offscreen document context only stops locally without remote recursion', () => {
+    let sentMessages: any[] = [];
+    const originalChrome = (globalThis as any).chrome;
+    (globalThis as any).chrome = {
+      runtime: {
+        id: 'test-extension-id',
+        sendMessage: (msg: any) => { sentMessages.push(msg); }
+      }
+    };
+
+    // Simulate offscreen context flag
+    (globalThis as any).__IS_OFFSCREEN_DOCUMENT__ = true;
+
+    try {
+      assert.strictEqual(farsiOfflineTts.isOffscreenDocumentContext(), true);
+      (farsiOfflineTts as any).isSpeakingActive = true;
+      farsiOfflineTts.stop();
+
+      assert.strictEqual(farsiOfflineTts.isSpeaking(), false);
+      assert.strictEqual(sentMessages.length, 0, 'Offscreen document context must never dispatch remote STOP');
+    } finally {
+      delete (globalThis as any).__IS_OFFSCREEN_DOCUMENT__;
+      (globalThis as any).chrome = originalChrome;
+    }
+  });
+
+  it('onStart callback is invoked at most once per playbackId even if both STARTED and PLAYING events are received', () => {
+    let startCount = 0;
+    (farsiOfflineTts as any).currentPlayingId = 601;
+    (farsiOfflineTts as any).hasNotifiedStartForCurrent = false;
+    (farsiOfflineTts as any).hasNotifiedEndForCurrent = false;
+    (farsiOfflineTts as any).activeCallbacks = {
+      onStart: () => { startCount++; },
+      onEnd: () => {}
+    };
+
+    // 1. First event: STARTED
+    farsiOfflineTts.handleExtensionStatusChanged({ state: 'STARTED', playbackId: 601 });
+    assert.strictEqual(startCount, 1, 'onStart should fire on initial STARTED');
+
+    // 2. Second event: PLAYING
+    farsiOfflineTts.handleExtensionStatusChanged({ state: 'PLAYING', playbackId: 601 });
+    assert.strictEqual(startCount, 1, 'onStart must NOT fire a second time on PLAYING');
+  });
+
+  it('onEnd is invoked at most once and never after STOPPED or ERROR', () => {
+    let endCount = 0;
+    (farsiOfflineTts as any).currentPlayingId = 701;
+    (farsiOfflineTts as any).hasNotifiedStartForCurrent = true;
+    (farsiOfflineTts as any).hasNotifiedEndForCurrent = false;
+    (farsiOfflineTts as any).activeCallbacks = {
+      onEnd: () => { endCount++; }
+    };
+
+    // STOPPED transition
+    farsiOfflineTts.handleExtensionStatusChanged({ state: 'STOPPED', playbackId: 701 });
+    assert.strictEqual(endCount, 0, 'STOPPED must not call onEnd');
+
+    // Stale late ENDED from audio element
+    farsiOfflineTts.handleExtensionStatusChanged({ state: 'ENDED', playbackId: 701 });
+    assert.strictEqual(endCount, 0, 'Late ENDED must not call onEnd after STOPPED');
+  });
+
+  it('Repeated stop() calls are safe, idempotent, and handle idle state cleanly', () => {
+    assert.doesNotThrow(() => {
+      farsiOfflineTts.stopLocal();
+      farsiOfflineTts.stopLocal();
+      farsiOfflineTts.handleStopMessage();
+      farsiOfflineTts.stop();
+    });
+    assert.strictEqual(farsiOfflineTts.isSpeaking(), false);
+    assert.strictEqual(farsiOfflineTts.getLifecycleState(), 'IDLE');
+  });
+});
+
+describe('13. Phase 6: Deterministic TTS Initialization, Concurrency & Fallback Hardening', () => {
+  // Test 1: Concurrent Piper initialization shares one promise
+  it('1. Concurrent Piper initialization shares one single-flight promise', async () => {
+    const engine = new PiperEngine();
+    // Two simultaneous calls
+    const p1 = engine.init();
+    const p2 = engine.init();
+    assert.strictEqual(p1, p2, 'Concurrent callers must receive the exact same promise instance');
+    await p1;
+    assert.strictEqual(engine.isSpeaking(), false);
+  });
+
+  // Test 2: Failed initialization can be retried
+  it('2. Failed initialization can be retried without permanent failure caching', async () => {
+    const engine = new PiperEngine();
+    // First call fails because no model in IDB
+    const res1 = await engine.init();
+    assert.strictEqual(res1, false, 'First attempt without model returns false');
+
+    // Supply mock session for retry
+    const mockSession = { run: async () => ({ output: new Float32Array(100) }) };
+    engine.setSessionForTesting(mockSession, { audio: { sample_rate: 22050 } });
+    const res2 = await engine.init();
+    assert.strictEqual(res2, true, 'Retry after fixing state must succeed');
+    assert.strictEqual(engine.isModelReady(), true);
+  });
+
+  // Test 3: eSpeak initialization failure resets manager state
+  it('3. eSpeak synthesis/init failure cleanly resets manager speaking state to IDLE', async () => {
+    farsiOfflineTts.resetForTesting();
+    const originalSynth = espeakEngine.synthesize;
+    try {
+      espeakEngine.synthesize = async () => {
+        throw new Error('eSpeak WASM memory limit exceeded');
+      };
+
+      let errorReceived: Error | null = null;
+      await farsiOfflineTts.speak('تست خطا', {
+        engine: 'espeak',
+        onError: (err) => { errorReceived = err; }
+      });
+
+      assert.ok(errorReceived, 'onError must be invoked');
+      assert.strictEqual(farsiOfflineTts.isSpeaking(), false, 'isSpeaking must be false after error');
+      assert.strictEqual(farsiOfflineTts.getLifecycleState(), 'IDLE', 'lifecycleState must be IDLE');
+    } finally {
+      espeakEngine.synthesize = originalSynth;
+      farsiOfflineTts.resetForTesting();
+    }
+  });
+
+  // Test 4: Piper failure correctly invokes fallback
+  it('4. Piper failure correctly invokes fallback and preserves original failure reason', async () => {
+    farsiOfflineTts.resetForTesting();
+    let fallbackNotified = false;
+    let fallbackReason = '';
+
+    const res = await farsiOfflineTts.synthesize('آزمایش فال‌بک', {
+      engine: 'piper',
+      allowFallback: true,
+      onFallback: (reason) => {
+        fallbackNotified = true;
+        fallbackReason = reason;
+      }
+    });
+
+    assert.strictEqual(res.engineUsed, 'espeak', 'Must use eSpeak fallback');
+    assert.strictEqual(res.fallbackTriggered, true, 'fallbackTriggered must be true');
+    assert.ok(fallbackNotified, 'onFallback callback must be called');
+    assert.ok(fallbackReason.length > 0, 'fallbackReason must not be empty');
+  });
+
+  // Test 5: Successful Piper synthesis never invokes eSpeak synthesis
+  it('5. Successful Piper synthesis never invokes eSpeak synthesis', async () => {
+    farsiOfflineTts.resetForTesting();
+    let espeakCalled = false;
+    const originalEspeakSynth = espeakEngine.synthesize;
+    try {
+      espeakEngine.synthesize = async (t, o) => {
+        espeakCalled = true;
+        return originalEspeakSynth.call(espeakEngine, t, o);
+      };
+
+      // Mock Piper to succeed
+      const mockSession = {
+        inputNames: ['input', 'input_lengths', 'scales'],
+        outputNames: ['output'],
+        run: async () => ({
+          output: {
+            data: new Float32Array(22050),
+            dims: [1, 1, 22050]
+          }
+        })
+      };
+      piperEngine.setSessionForTesting(mockSession, rawModelConfig);
+
+      const res = await farsiOfflineTts.synthesize('سلام دنیا', { engine: 'piper' });
+      assert.strictEqual(res.success, true, 'Piper must succeed');
+      assert.strictEqual(res.engineUsed, 'piper', 'Engine used must be piper');
+      assert.strictEqual(res.fallbackTriggered, false, 'Fallback must NOT be triggered');
+      assert.strictEqual(espeakCalled, false, 'eSpeak synthesis must NOT be called');
+    } finally {
+      espeakEngine.synthesize = originalEspeakSynth;
+      piperEngine.resetForTesting();
+      farsiOfflineTts.resetForTesting();
+    }
+  });
+
+  // Test 6: Both engines failing produces an explicit error
+  it('6. Both engines failing produces an explicit documented failure without crashing', async () => {
+    farsiOfflineTts.resetForTesting();
+    const originalPiperSynth = piperEngine.synthesize;
+    const originalEspeakSynth = espeakEngine.synthesize;
+
+    try {
+      piperEngine.synthesize = async () => ({
+        success: false,
+        wavBlob: new Blob([], { type: 'audio/wav' }),
+        durationMs: 0,
+        sampleRate: 22050,
+        engineUsed: 'piper',
+        fallbackTriggered: false,
+        error: 'ONNX Web session execution failed'
+      });
+
+      espeakEngine.synthesize = async () => ({
+        success: false,
+        wavBlob: new Blob([], { type: 'audio/wav' }),
+        durationMs: 0,
+        sampleRate: 22050,
+        engineUsed: 'espeak',
+        fallbackTriggered: false,
+        error: 'eSpeak WASM allocation failed'
+      });
+
+      const res = await farsiOfflineTts.synthesize('تست شکست دوگانه', {
+        engine: 'piper',
+        allowFallback: true
+      });
+
+      assert.strictEqual(res.success, false, 'Combined failure must report success: false');
+      assert.ok(res.error?.includes('Both Piper and eSpeak fallback failed'), 'Must provide useful error diagnosis');
+      assert.strictEqual(farsiOfflineTts.isSpeaking(), false);
+    } finally {
+      piperEngine.synthesize = originalPiperSynth;
+      espeakEngine.synthesize = originalEspeakSynth;
+      farsiOfflineTts.resetForTesting();
+    }
+  });
+
+  // Test 7: Stop during initialization prevents later playback
+  it('7. Stop during initialization/synthesis prevents later playback', async () => {
+    farsiOfflineTts.resetForTesting();
+    let playbackStarted = false;
+    let endFired = false;
+
+    // Simulate synthesis with delay
+    const originalSynth = farsiOfflineTts.synthesize;
+    try {
+      farsiOfflineTts.synthesize = async (t, o) => {
+        await new Promise((r) => setTimeout(r, 40));
+        return {
+          success: true,
+          wavBlob: encodePcmWav(new Float32Array(2205), 22050),
+          durationMs: 100,
+          sampleRate: 22050,
+          engineUsed: 'espeak',
+          fallbackTriggered: false,
+        };
+      };
+
+      const speakPromise = farsiOfflineTts.speak('جمله برای تست توقف', {
+        onStart: () => { playbackStarted = true; },
+        onEnd: () => { endFired = true; }
+      });
+
+      // Stop immediately while in-flight
+      farsiOfflineTts.stop();
+
+      await speakPromise;
+
+      assert.strictEqual(playbackStarted, false, 'Playback must NOT start after stop');
+      assert.strictEqual(farsiOfflineTts.isSpeaking(), false, 'isSpeaking must be false');
+      assert.strictEqual(farsiOfflineTts.getLifecycleState(), 'IDLE', 'State must be IDLE');
+    } finally {
+      farsiOfflineTts.synthesize = originalSynth;
+      farsiOfflineTts.resetForTesting();
+    }
+  });
+
+  // Test 8: Stop during inference prevents stale playback
+  it('8. Stop during inference prevents stale playback and callbacks', async () => {
+    farsiOfflineTts.resetForTesting();
+    let lateCallbackFired = false;
+
+    const originalPiperSynth = piperEngine.synthesize;
+    try {
+      piperEngine.synthesize = async () => {
+        await new Promise((r) => setTimeout(r, 50));
+        return {
+          success: true,
+          wavBlob: encodePcmWav(new Float32Array(2205), 22050),
+          durationMs: 100,
+          sampleRate: 22050,
+          engineUsed: 'piper',
+          fallbackTriggered: false,
+        };
+      };
+
+      const p = farsiOfflineTts.speak('آزمایش اینفرنس', {
+        engine: 'piper',
+        allowFallback: false,
+        onStart: () => { lateCallbackFired = true; },
+        onEnd: () => { lateCallbackFired = true; }
+      });
+
+      // Stop during the 50ms inference window
+      setTimeout(() => {
+        farsiOfflineTts.stop();
+      }, 10);
+
+      await p;
+
+      assert.strictEqual(lateCallbackFired, false, 'Callbacks must not fire after stop');
+      assert.strictEqual(farsiOfflineTts.isSpeaking(), false);
+    } finally {
+      piperEngine.synthesize = originalPiperSynth;
+      farsiOfflineTts.resetForTesting();
+    }
+  });
+
+  // Test 9: Missing config is rejected
+  it('9. Missing config is rejected by validation', () => {
+    const r1 = validatePiperModelConfig(null);
+    assert.strictEqual(r1.valid, false);
+    assert.ok(r1.error?.includes('missing'));
+
+    const r2 = validatePiperModelConfig(undefined);
+    assert.strictEqual(r2.valid, false);
+    assert.ok(r2.error?.includes('missing'));
+  });
+
+  // Test 10: Invalid JSON is rejected
+  it('10. Invalid JSON and blank objects are rejected', () => {
+    const r1 = validatePiperModelConfig('{ invalid json string: ');
+    assert.strictEqual(r1.valid, false);
+    assert.ok(r1.error?.includes('parse JSON'));
+
+    const r2 = validatePiperModelConfig('{}');
+    assert.strictEqual(r2.valid, false);
+    assert.ok(r2.error?.includes('empty'));
+
+    const r3 = validatePiperModelConfig('   ');
+    assert.strictEqual(r3.valid, false);
+  });
+
+  // Test 11: Invalid phoneme maps are rejected
+  it('11. Invalid phoneme maps without numeric IDs are rejected', () => {
+    // Empty map
+    const r1 = validatePiperModelConfig({
+      audio: { sample_rate: 22050 },
+      phoneme_type: 'espeak',
+      phoneme_id_map: {}
+    });
+    assert.strictEqual(r1.valid, false);
+
+    // Map without integer numbers
+    const r2 = validatePiperModelConfig({
+      audio: { sample_rate: 22050 },
+      phoneme_type: 'espeak',
+      phoneme_id_map: { a: 'not_a_number', b: null }
+    });
+    assert.strictEqual(r2.valid, false);
+    assert.ok(r2.error?.includes('phoneme_id_map'));
+  });
+
+  // Test 12: Failed IndexedDB writes do not create ready entries
+  it('12. Corrupt model data does not create ready entries', async () => {
+    const store = (await import('../indexedDbModelStore')).indexedDbModelStore;
+    const corruptBytes = new ArrayBuffer(100); // Only 100 bytes (min 5000 required)
+    const validConfigStr = JSON.stringify(rawModelConfig);
+
+    const saved = await store.saveModel('test-corrupt-voice', corruptBytes, validConfigStr);
+    assert.strictEqual(saved, false, 'Saving corrupt bytes must return false');
+
+    const cacheInfo = await store.checkCache('test-corrupt-voice');
+    assert.notStrictEqual(cacheInfo.status, 'ready', 'Cache status must NOT be ready');
+    assert.strictEqual(cacheInfo.isOfflineReady, false);
+  });
+
+  // Test 13: Repeated requests do not leak state or listeners
+  it('13. Repeated speak and stop requests maintain deterministic state', async () => {
+    farsiOfflineTts.resetForTesting();
+    for (let i = 0; i < 5; i++) {
+      farsiOfflineTts.stop();
+      assert.strictEqual(farsiOfflineTts.isSpeaking(), false);
+      assert.strictEqual(farsiOfflineTts.getLifecycleState(), 'IDLE');
+    }
+  });
+
+  // Test 14: A failed request does not prevent the next request from succeeding
+  it('14. A failed request does not poison subsequent requests', async () => {
+    farsiOfflineTts.resetForTesting();
+    let errorFired = false;
+    let secondSuccessFired = false;
+
+    const originalSynth = espeakEngine.synthesize;
+    try {
+      // 1. First call fails
+      espeakEngine.synthesize = async () => ({
+        success: false,
+        wavBlob: new Blob([], { type: 'audio/wav' }),
+        durationMs: 0,
+        sampleRate: 22050,
+        engineUsed: 'espeak',
+        fallbackTriggered: false,
+        error: 'First request artificial failure'
+      });
+
+      await farsiOfflineTts.speak('شکست اول', {
+        engine: 'espeak',
+        onError: () => { errorFired = true; }
+      });
+      assert.strictEqual(errorFired, true, 'First request should report error');
+      assert.strictEqual(farsiOfflineTts.isSpeaking(), false);
+
+      // 2. Second request succeeds
+      espeakEngine.synthesize = async () => ({
+        success: true,
+        wavBlob: encodePcmWav(new Float32Array(2205), 22050),
+        durationMs: 100,
+        sampleRate: 22050,
+        engineUsed: 'espeak',
+        fallbackTriggered: false,
+      });
+
+      await farsiOfflineTts.speak('موفقیت دوم', {
+        engine: 'espeak',
+        onStart: () => { secondSuccessFired = true; }
+      });
+
+      assert.strictEqual(secondSuccessFired, true, 'Second request must succeed normally');
+      assert.strictEqual(farsiOfflineTts.isSpeaking(), false);
+    } finally {
+      espeakEngine.synthesize = originalSynth;
+      farsiOfflineTts.resetForTesting();
+    }
+  });
 });
 
 console.log('✓ All Dual-Engine Offline Farsi TTS Unit, Integration & Regression Tests Passed!');

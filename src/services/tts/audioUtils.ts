@@ -248,6 +248,13 @@ export async function playAudioBlob(
 ): Promise<AudioPlaybackHandle> {
   const volume = Math.max(0, Math.min(1, options.volume ?? 1.0));
 
+  // Node.js testing environment without real browser Audio
+  if (typeof process !== 'undefined' && process.versions?.node && typeof window === 'undefined') {
+    options.onStart?.();
+    options.onEnd?.();
+    return { stop: () => {} };
+  }
+
   // 1. Try HTML5 Audio element first (preferred in browser/offscreen)
   if (typeof window !== 'undefined' && typeof window.Audio !== 'undefined' && typeof URL !== 'undefined') {
     try {

@@ -109,7 +109,8 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
 
   const handleSelectFarsiEngine = (engine: FarsiTtsEngineType) => {
     farsiOfflineTts.setEngine(engine);
-    onUpdateSettings({ farsiTtsEngine: engine });
+    const voiceURI = engine === 'piper' ? 'farsi-piper-neural' : (engine === 'espeak' ? 'farsi-espeak-wasm' : 'farsi-custom');
+    onUpdateSettings({ farsiTtsEngine: engine, speechVoiceURI: voiceURI });
     if (engine === 'piper' && !piperCache.isOfflineReady) {
       setFarsiTtsNotice('⚠️ Piper neural model not yet cached. It will automatically fallback to eSpeak NG WASM until downloaded.');
     } else if (engine === 'custom') {
@@ -1119,7 +1120,19 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                         <select
                           id="speech-voice-select"
                           value={settings.speechVoiceURI || ''}
-                          onChange={(e) => onUpdateSettings({ speechVoiceURI: e.target.value })}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            const engine: FarsiTtsEngineType | undefined = 
+                              val === 'farsi-piper-neural' ? 'piper' : 
+                              val === 'farsi-espeak-wasm' ? 'espeak' : 
+                              val === 'farsi-custom' ? 'custom' : undefined;
+                            if (engine) {
+                              farsiOfflineTts.setEngine(engine);
+                              onUpdateSettings({ speechVoiceURI: val, farsiTtsEngine: engine });
+                            } else {
+                              onUpdateSettings({ speechVoiceURI: val });
+                            }
+                          }}
                           aria-label="Select Voice"
                           className={`w-full p-2.5 rounded-xl border text-xs font-medium ${theme.borderClass} ${theme.inputBg} ${theme.textPrimary} focus:outline-none focus:border-red-500 transition-colors cursor-pointer`}
                         >
@@ -1150,12 +1163,16 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                     <div className="flex items-center justify-between pt-1">
                       <button
                         type="button"
-                        onClick={() => onUpdateSettings({
-                          fontFamily: 'vazirmatn',
-                          speechVoiceURI: 'farsi-webspeech-cloud',
-                          speechNarration: true,
-                          highlightStyle: 'middle-two',
-                        })}
+                        onClick={() => {
+                          farsiOfflineTts.setEngine('piper');
+                          onUpdateSettings({
+                            fontFamily: 'vazirmatn',
+                            speechVoiceURI: 'farsi-piper-neural',
+                            farsiTtsEngine: 'piper',
+                            speechNarration: true,
+                            highlightStyle: 'middle-two',
+                          });
+                        }}
                         className="text-[11px] font-medium text-red-400 hover:text-red-300 transition-colors flex items-center gap-1 underline underline-offset-2"
                       >
                         <span>🇮🇷 بهینه‌سازی سریع برای فارسی (Apply Farsi Font & Voice)</span>

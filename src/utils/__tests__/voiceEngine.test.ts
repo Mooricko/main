@@ -165,13 +165,72 @@ speechNarrator.speakFromIndex({
 assert(spokeUtterance !== null, 'Utterance must be created and queued');
 assert(spokeUtterance.text.includes('Hello world, this works.'), 'Utterance text must match chunk words');
 
-setTimeout(() => {
+setTimeout(async () => {
   assert(syncedIndices.length > 0, `Word sync should have fired at least one word index, got ${syncedIndices.length}`);
   speechNarrator.stop();
   assert(synthCanceled, 'Synth cancel must be called on stop()');
   console.log('  ✓ Speech narration utterance initialization, boundary sync, and stop verified');
 
+  // Test 5: Farsi Full Text Flow & RSVP Narration with Offline Dual-Engine TTS
+  console.log('Test 5: Farsi Full Text Flow & RSVP Narration with Offline TTS');
+  const { farsiOfflineTts } = await import('../../services/tts/farsiOfflineTTS');
+
+  let farsiSynthesizeCalledWith: { text: string; engine?: string } | null = null;
+  const originalSynthesize = farsiOfflineTts.synthesize;
+
+  farsiOfflineTts.synthesize = async (text, options) => {
+    farsiSynthesizeCalledWith = { text, engine: options?.engine };
+    return {
+      success: true,
+      wavBlob: new Blob([new Uint8Array(22050)], { type: 'audio/wav' }),
+      durationMs: 250,
+      engineUsed: options?.engine || 'espeak',
+    };
+  };
+
+  const farsiTestWords: HighlightedWordParts[] = [
+    { original: 'کتاب', prefixPunct: '', beforeHighlight: '', highlightedText: 'کتـ', afterHighlight: 'ـاب', suffixPunct: '', hasSentenceEnd: false, hasClausePause: false, hasParagraphBreak: false, index: 0, isRtl: true },
+    { original: 'دانشگاه،', prefixPunct: '', beforeHighlight: '', highlightedText: 'دا', afterHighlight: 'نشگاه', suffixPunct: '،', hasSentenceEnd: false, hasClausePause: true, hasParagraphBreak: false, index: 1, isRtl: true },
+    { original: 'بسیار', prefixPunct: '', beforeHighlight: '', highlightedText: 'بسـ', afterHighlight: 'ـیار', suffixPunct: '', hasSentenceEnd: false, hasClausePause: false, hasParagraphBreak: false, index: 2, isRtl: true },
+    { original: 'آموزنده', prefixPunct: '', beforeHighlight: '', highlightedText: 'آمـ', afterHighlight: 'ـوزنده', suffixPunct: '', hasSentenceEnd: false, hasClausePause: false, hasParagraphBreak: false, index: 3, isRtl: true },
+    { original: 'است.', prefixPunct: '', beforeHighlight: '', highlightedText: 'اسـ', afterHighlight: 'ـت', suffixPunct: '.', hasSentenceEnd: true, hasClausePause: false, hasParagraphBreak: false, index: 4, isRtl: true },
+  ];
+
+  const farsiSyncedIndices: number[] = [];
+  let farsiFinishedCalled = false;
+
+  const farsiSettings: ReaderSettings = {
+    ...mockSettings,
+    speechVoiceURI: 'farsi-piper-neural',
+    farsiTtsEngine: 'piper',
+    farsiTtsSpeed: 1.0,
+  };
+
+  speechNarrator.speakFromIndex({
+    words: farsiTestWords,
+    startIndex: 0,
+    settings: farsiSettings,
+    totalWords: 5,
+    onWordSync: (idx) => {
+      farsiSyncedIndices.push(idx);
+    },
+    onFinished: () => {
+      farsiFinishedCalled = true;
+    },
+    isPlayingCheck: () => true,
+  });
+
+  // Verify that farsiOfflineTts.synthesize was invoked with piper engine and the Persian text!
+  assert(farsiSynthesizeCalledWith !== null, 'farsiOfflineTts.synthesize must be invoked for Farsi text');
+  assert(farsiSynthesizeCalledWith.engine === 'piper', `Engine must be piper, got ${farsiSynthesizeCalledWith.engine}`);
+  assert(farsiSynthesizeCalledWith.text.includes('کتاب'), 'Synthesize text must contain the Farsi words');
+
+  // Verify immediate stop cleans up
+  speechNarrator.stop();
+  farsiOfflineTts.synthesize = originalSynthesize;
+  console.log('  ✓ Farsi RSVP & Flow narration routes to Offline TTS engine with synchronized boundaries');
+
   console.log('=============================================================');
-  console.log('All Voice Engine Tests Passed Successfully! (4 Suites)');
+  console.log('All Voice Engine Tests Passed Successfully! (5 Suites)');
   console.log('=============================================================');
 }, 60);

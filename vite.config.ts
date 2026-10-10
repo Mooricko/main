@@ -74,7 +74,7 @@ export default defineConfig(() => {
       alias: {
         '@': path.resolve(__dirname, '.'),
       },
-      dedupe: ['react', 'react-dom'],
+      dedupe: ['react', 'react-dom', 'react-dom/client'],
     },
     optimizeDeps: {
       include: [
@@ -93,7 +93,6 @@ export default defineConfig(() => {
         'pdfjs-dist',
       ],
       exclude: ['onnxruntime-web', 'espeak-ng'],
-      force: true,
     },
     build: {
       outDir: 'dist',

@@ -252,6 +252,24 @@ class IndexedDbModelStore {
   }
 
   /**
+   * Internal helper to inspect raw record in IndexedDB without throwing
+   */
+  public async getRawRecord(modelId: string = DEFAULT_PIPER_MODEL_NAME): Promise<StoredModelRecord | null> {
+    try {
+      const db = await this.getDB();
+      return new Promise((resolve) => {
+        const tx = db.transaction(STORE_NAME, 'readonly');
+        const store = tx.objectStore(STORE_NAME);
+        const req = store.get(modelId);
+        req.onsuccess = () => resolve((req.result as StoredModelRecord) || null);
+        req.onerror = () => resolve(null);
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Save model and config to IndexedDB after strict validation
    */
   public async saveModel(
@@ -302,10 +320,38 @@ class IndexedDbModelStore {
           });
           resolve(true);
         };
-        req.onerror = () => reject(req.error);
+        req.onerror = () => {
+          this.currentStatus = 'error';
+          this.errorCategory = 'STORAGE_FAILED';
+          this.errorMessage = req.error?.message || 'Failed to save Piper model to IndexedDB';
+          this.notify({
+            status: 'error',
+            modelName: modelId,
+            sizeBytes: 0,
+            downloadProgress: 0,
+            errorMessage: this.errorMessage,
+            errorCategory: 'STORAGE_FAILED',
+            cacheVersion: PIPER_CACHE_VERSION,
+            isOfflineReady: false,
+          });
+          reject(req.error);
+        };
       });
     } catch (err: any) {
       console.error('Failed to save Piper model to IndexedDB:', err);
+      this.currentStatus = 'error';
+      this.errorCategory = err?.message?.includes('parse') ? 'PARSE_FAILED' : 'STORAGE_FAILED';
+      this.errorMessage = err?.message || 'Failed to save Piper model';
+      this.notify({
+        status: 'error',
+        modelName: modelId,
+        sizeBytes: 0,
+        downloadProgress: 0,
+        errorMessage: this.errorMessage,
+        errorCategory: this.errorCategory,
+        cacheVersion: PIPER_CACHE_VERSION,
+        isOfflineReady: false,
+      });
       return false;
     }
   }
@@ -313,6 +359,7 @@ class IndexedDbModelStore {
   /**
    * Download model and persist in IndexedDB with real progress tracking.
    * Requires valid configuration and weights without silent fallbacks.
+   * Avoids unnecessarily redownloading 25MB ONNX file if verified valid weights already exist in storage.
    */
   public async downloadAndCacheModel(
     onProgress?: (pct: number) => void
@@ -377,61 +424,73 @@ class IndexedDbModelStore {
         isOfflineReady: false,
       });
 
-      // 2. Fetch ONNX Model weights with progress
-      const modelUrl = `${MODEL_BASE_URL}/${ONNX_FILENAME}`;
-      let modelRes: Response;
+      // 2. Fetch or reuse verified ONNX Model weights
+      let onnxBytes: ArrayBuffer | null = null;
       try {
-        modelRes = await fetch(modelUrl);
-      } catch (netErr: any) {
-        const err: any = new Error(`download failed: network error fetching weights from ${modelUrl} (${netErr?.message})`);
-        err.category = 'DOWNLOAD_FAILED';
-        throw err;
-      }
-      if (!modelRes.ok) {
-        const err: any = new Error(`download failed: HTTP ${modelRes.status} fetching weights from ${modelUrl}`);
-        err.category = 'DOWNLOAD_FAILED';
-        throw err;
-      }
+        const existing = await this.getRawRecord(DEFAULT_PIPER_MODEL_NAME);
+        if (existing?.onnxBytes && validatePiperModelBytes(existing.onnxBytes).valid) {
+          onnxBytes = existing.onnxBytes;
+          console.log('[IndexedDbModelStore] Existing verified ONNX model weights found in storage; reusing existing weights.');
+          this.currentProgress = 85;
+          onProgress?.(85);
+        }
+      } catch {}
 
-      const contentLength = Number(modelRes.headers.get('content-length')) || 25 * 1024 * 1024;
-      const reader = modelRes.body?.getReader();
+      if (!onnxBytes) {
+        const modelUrl = `${MODEL_BASE_URL}/${ONNX_FILENAME}`;
+        let modelRes: Response;
+        try {
+          modelRes = await fetch(modelUrl);
+        } catch (netErr: any) {
+          const err: any = new Error(`download failed: network error fetching weights from ${modelUrl} (${netErr?.message})`);
+          err.category = 'DOWNLOAD_FAILED';
+          throw err;
+        }
+        if (!modelRes.ok) {
+          const err: any = new Error(`download failed: HTTP ${modelRes.status} fetching weights from ${modelUrl}`);
+          err.category = 'DOWNLOAD_FAILED';
+          throw err;
+        }
 
-      let onnxBytes: ArrayBuffer;
-      if (!reader) {
-        onnxBytes = await modelRes.arrayBuffer();
-        this.currentProgress = 90;
-        onProgress?.(90);
-      } else {
-        const chunks: Uint8Array[] = [];
-        let receivedBytes = 0;
+        const contentLength = Number(modelRes.headers.get('content-length')) || 25 * 1024 * 1024;
+        const reader = modelRes.body?.getReader();
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (value) {
-            chunks.push(value);
-            receivedBytes += value.length;
-            const pct = Math.min(90, Math.floor(15 + (receivedBytes / contentLength) * 75));
-            this.currentProgress = pct;
-            onProgress?.(pct);
-            this.notify({
-              status: 'downloading',
-              modelName: DEFAULT_PIPER_MODEL_NAME,
-              sizeBytes: receivedBytes,
-              downloadProgress: pct,
-              cacheVersion: PIPER_CACHE_VERSION,
-              isOfflineReady: false,
-            });
+        if (!reader) {
+          onnxBytes = await modelRes.arrayBuffer();
+          this.currentProgress = 90;
+          onProgress?.(90);
+        } else {
+          const chunks: Uint8Array[] = [];
+          let receivedBytes = 0;
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (value) {
+              chunks.push(value);
+              receivedBytes += value.length;
+              const pct = Math.min(90, Math.floor(15 + (receivedBytes / contentLength) * 75));
+              this.currentProgress = pct;
+              onProgress?.(pct);
+              this.notify({
+                status: 'downloading',
+                modelName: DEFAULT_PIPER_MODEL_NAME,
+                sizeBytes: receivedBytes,
+                downloadProgress: pct,
+                cacheVersion: PIPER_CACHE_VERSION,
+                isOfflineReady: false,
+              });
+            }
           }
-        }
 
-        const merged = new Uint8Array(receivedBytes);
-        let offset = 0;
-        for (const chunk of chunks) {
-          merged.set(chunk, offset);
-          offset += chunk.length;
+          const merged = new Uint8Array(receivedBytes);
+          let offset = 0;
+          for (const chunk of chunks) {
+            merged.set(chunk, offset);
+            offset += chunk.length;
+          }
+          onnxBytes = merged.buffer;
         }
-        onnxBytes = merged.buffer;
       }
 
       // Validate weights before saving

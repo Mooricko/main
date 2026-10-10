@@ -2,6 +2,8 @@ import { HighlightedWordParts, ReaderSettings } from '../types';
 import { calculateWordDelayMs, isRtlText } from './textParser';
 import { persianAudioSynth } from './persianSpeechSynth';
 import { farsiOfflineTts } from '../services/tts/farsiOfflineTTS';
+import { playAudioBlob, AudioPlaybackHandle } from '../services/tts/audioUtils';
+import { FarsiTtsEngineType, SynthesisResult } from '../services/tts/types';
 
 export interface VoiceOption {
   name: string;
@@ -60,6 +62,9 @@ class SpeechNarrationService {
   private synthTimer: NodeJS.Timeout | null = null;
   private chunkTransitionTimer: NodeJS.Timeout | null = null;
   private keepAliveTimer: NodeJS.Timeout | null = null;
+  private farsiWordTimers: NodeJS.Timeout[] = [];
+  private activeFarsiPlaybackHandle: AudioPlaybackHandle | null = null;
+  private currentWordsReference: HighlightedWordParts[] = [];
   private initialized: boolean = false;
 
   constructor() {
@@ -107,12 +112,10 @@ class SpeechNarrationService {
 
   public isSupported(): boolean {
     try {
-      return (
-        typeof window !== 'undefined' &&
-        'speechSynthesis' in window &&
-        Boolean(window.speechSynthesis) &&
-        'SpeechSynthesisUtterance' in window
-      );
+      if (typeof window === 'undefined') return false;
+      const hasWebSpeech = 'speechSynthesis' in window && Boolean(window.speechSynthesis) && 'SpeechSynthesisUtterance' in window;
+      const hasAudioPlayback = typeof window.Audio !== 'undefined' || typeof (window as any).AudioContext !== 'undefined';
+      return hasWebSpeech || hasAudioPlayback;
     } catch {
       return false;
     }
@@ -218,6 +221,15 @@ class SpeechNarrationService {
         default: false,
         localService: true,
         provider: 'Built-in Acoustic Audio Synth',
+        isFarsi: true,
+      },
+      {
+        name: '🎙️ Custom Endpoint (BYO مدل دلخواه)',
+        lang: 'fa-IR',
+        voiceURI: 'farsi-custom',
+        default: false,
+        localService: false,
+        provider: 'Custom Endpoint (/v1/audio/speech)',
         isFarsi: true,
       },
     ];
@@ -338,9 +350,16 @@ class SpeechNarrationService {
     this.stopKeepAlive();
     this.clearFallbackTimer();
     this.clearSynthTimer();
+    this.clearFarsiWordTimers();
     if (this.chunkTransitionTimer) {
       clearTimeout(this.chunkTransitionTimer);
       this.chunkTransitionTimer = null;
+    }
+    if (this.activeFarsiPlaybackHandle) {
+      try {
+        this.activeFarsiPlaybackHandle.stop();
+      } catch {}
+      this.activeFarsiPlaybackHandle = null;
     }
     this.isSpeaking = false;
     this.currentUtterance = null;
@@ -356,6 +375,13 @@ class SpeechNarrationService {
         console.debug('Speech cancel error:', e);
       }
     }
+  }
+
+  private clearFarsiWordTimers(): void {
+    for (const t of this.farsiWordTimers) {
+      clearTimeout(t);
+    }
+    this.farsiWordTimers = [];
   }
 
   private clearFallbackTimer(): void {
@@ -390,6 +416,11 @@ class SpeechNarrationService {
 
     if (voiceURI === 'farsi-espeak-wasm') {
       farsiOfflineTts.preview('espeak', rate, pitch, volume);
+      return;
+    }
+
+    if (voiceURI === 'farsi-custom') {
+      farsiOfflineTts.preview('custom', rate, pitch, volume);
       return;
     }
 
@@ -472,6 +503,7 @@ class SpeechNarrationService {
 
     const currentWpm = getCurrentWpm ? getCurrentWpm() : settings.wpm;
     const isWarmingUp = Boolean(settings.warmupMode && currentWpm < settings.wpm);
+    this.currentWordsReference = words;
 
     // Handle Persian Web Audio Synthesizer Provider Mode
     if (settings.speechVoiceURI === 'farsi-webaudio-synth') {
@@ -489,9 +521,6 @@ class SpeechNarrationService {
       });
       return;
     }
-
-    const synth = this.getSynth();
-    if (!synth || !this.isSupported()) return;
 
     // Locate matching start position within the words slice
     const hasIndexedWords = words.length > 0 && words.some(w => typeof w.index === 'number');
@@ -626,8 +655,58 @@ class SpeechNarrationService {
     }
 
     // Check if chunk is Farsi / RTL
-    const isFarsi = isRtlText(chunkText) || (settings.speechVoiceURI && settings.speechVoiceURI.startsWith('farsi-'));
+    const isFarsi = isRtlText(chunkText) || (Boolean(settings.speechVoiceURI) && settings.speechVoiceURI.startsWith('farsi-'));
     const detectedLang = isFarsi ? 'fa-IR' : detectLanguageFromText(chunkText);
+
+    const isExplicitFarsiOfflineVoice =
+      settings.speechVoiceURI === 'farsi-piper-neural' ||
+      settings.speechVoiceURI === 'farsi-espeak-wasm' ||
+      settings.speechVoiceURI === 'farsi-custom' ||
+      settings.speechVoiceURI === 'farsi-offline';
+
+    const isFarsiContent = isFarsi || detectedLang === 'fa-IR';
+
+    const resolvedVoice = this.resolveVoice(settings.speechVoiceURI, detectedLang);
+    const hasSystemFarsiVoice = Boolean(
+      resolvedVoice && (
+        resolvedVoice.lang.toLowerCase().startsWith('fa') ||
+        resolvedVoice.name.toLowerCase().includes('persian') ||
+        resolvedVoice.name.includes('فارسی')
+      )
+    );
+
+    const shouldUseFarsiOfflineTts =
+      isExplicitFarsiOfflineVoice ||
+      (isFarsiContent && (
+        Boolean(settings.farsiTtsEngine) ||
+        !hasSystemFarsiVoice ||
+        (Boolean(settings.speechVoiceURI) && settings.speechVoiceURI.startsWith('farsi-'))
+      ));
+
+    if (shouldUseFarsiOfflineTts) {
+      this.playFarsiOfflineTtsChunk({
+        chunkWords: this.activeChunkWords,
+        chunkStartIndex: startIndex,
+        chunkEndIndex: this.activeChunkEndIndex,
+        chunkText,
+        settings,
+        onWordSync,
+        onFinished,
+        isPlayingCheck,
+        utteranceId,
+        getCurrentWpm,
+        getWordsSlice,
+        effectiveTotalWords,
+      });
+      return;
+    }
+
+    const synth = this.getSynth();
+    if (!synth) {
+      this.isSpeaking = false;
+      onFinished();
+      return;
+    }
 
     // 3. Create and configure Utterance
     const utterance = new SpeechSynthesisUtterance(chunkText);
@@ -635,7 +714,7 @@ class SpeechNarrationService {
     activeUtterances.add(utterance);
 
     utterance.lang = detectedLang;
-    const voice = this.resolveVoice(settings.speechVoiceURI, detectedLang);
+    const voice = resolvedVoice;
     if (voice) utterance.voice = voice;
 
     utterance.pitch = Math.max(0.5, Math.min(1.5, settings.speechPitch || 1.0));
@@ -885,6 +964,307 @@ class SpeechNarrationService {
       isPlayingCheck,
       utteranceId,
     });
+  }
+
+  /**
+   * Dual-Engine Offline Farsi TTS playback with synchronized word pacing
+   */
+  private async playFarsiOfflineTtsChunk({
+    chunkWords,
+    chunkStartIndex,
+    chunkEndIndex,
+    chunkText,
+    settings,
+    onWordSync,
+    onFinished,
+    isPlayingCheck,
+    utteranceId,
+    getCurrentWpm,
+    getWordsSlice,
+    effectiveTotalWords,
+  }: {
+    chunkWords: HighlightedWordParts[];
+    chunkStartIndex: number;
+    chunkEndIndex: number;
+    chunkText: string;
+    settings: ReaderSettings;
+    onWordSync: WordSyncCallback;
+    onFinished: FinishedCallback;
+    isPlayingCheck: () => boolean;
+    utteranceId: number;
+    getCurrentWpm?: () => number;
+    getWordsSlice?: (startIndex: number, count: number) => Promise<HighlightedWordParts[]>;
+    effectiveTotalWords: number;
+  }): Promise<void> {
+    if (this.activeUtteranceId !== utteranceId || !isPlayingCheck() || !this.isSpeaking) {
+      return;
+    }
+
+    let engine: FarsiTtsEngineType = 'piper';
+    if (settings.speechVoiceURI === 'farsi-piper-neural') {
+      engine = 'piper';
+    } else if (settings.speechVoiceURI === 'farsi-espeak-wasm') {
+      engine = 'espeak';
+    } else if (settings.speechVoiceURI === 'farsi-custom') {
+      engine = 'custom';
+    } else if (settings.farsiTtsEngine) {
+      engine = settings.farsiTtsEngine;
+    } else {
+      engine = farsiOfflineTts.getActiveEngine();
+    }
+
+    const currentWpm = getCurrentWpm ? getCurrentWpm() : settings.wpm;
+    const wpmMultiplier = currentWpm / 160;
+    const userSpeed = settings.farsiTtsSpeed || 1.0;
+    const effectiveSpeed = Math.max(0.5, Math.min(2.0, Number((userSpeed * wpmMultiplier * (settings.speechRateMultiplier || 1.0)).toFixed(2))));
+    const effectivePitch = Math.max(0.6, Math.min(1.4, settings.farsiTtsPitch || settings.speechPitch || 1.0));
+    const effectiveVolume = Math.max(0, Math.min(1, settings.speechVolume ?? 1.0));
+
+    let synthResult: SynthesisResult;
+    try {
+      synthResult = await farsiOfflineTts.synthesize(chunkText, {
+        engine,
+        speed: effectiveSpeed,
+        pitch: effectivePitch,
+        volume: effectiveVolume,
+        allowFallback: true,
+      });
+    } catch (err) {
+      console.warn('Farsi offline TTS synthesize error:', err);
+      synthResult = {
+        success: false,
+        engineUsed: engine,
+        error: String(err),
+      };
+    }
+
+    if (this.activeUtteranceId !== utteranceId || !isPlayingCheck() || !this.isSpeaking) {
+      return;
+    }
+
+    if (!synthResult.success || !synthResult.wavBlob) {
+      console.warn('Farsi TTS synthesis failed, advancing to next chunk:', synthResult.error);
+      const nextIndex = chunkEndIndex + 1;
+      if (nextIndex < effectiveTotalWords && isPlayingCheck() && this.isSpeaking) {
+        this.advanceToNextChunk(
+          nextIndex,
+          settings,
+          onWordSync,
+          onFinished,
+          isPlayingCheck,
+          utteranceId,
+          getCurrentWpm,
+          getWordsSlice,
+          effectiveTotalWords
+        );
+      } else {
+        this.isSpeaking = false;
+        onFinished();
+      }
+      return;
+    }
+
+    // Immediately synchronize the initial word in chunk
+    const firstWordIndex = typeof chunkWords[0].index === 'number' ? chunkWords[0].index : chunkStartIndex;
+    if (this.lastReportedWordIndex < firstWordIndex) {
+      this.lastReportedWordIndex = firstWordIndex;
+      onWordSync(firstWordIndex);
+    }
+
+    // Calculate word timing proportions
+    const totalAudioMs = synthResult.durationMs && synthResult.durationMs > 0
+      ? synthResult.durationMs
+      : chunkWords.length * (60000 / currentWpm);
+
+    const wordWeights = chunkWords.map((w) =>
+      calculateWordDelayMs(w, currentWpm, settings.smartPunctuationPause, settings.smartPace)
+    );
+    const sumWeights = wordWeights.reduce((a, b) => a + b, 0) || 1;
+
+    let accumulatedMs = 0;
+    this.clearFarsiWordTimers();
+
+    for (let i = 0; i < chunkWords.length; i++) {
+      const wordObj = chunkWords[i];
+      const wordGlobalIndex = typeof wordObj.index === 'number' ? wordObj.index : chunkStartIndex + i;
+      const wordShareMs = (wordWeights[i] / sumWeights) * totalAudioMs;
+
+      if (i > 0) {
+        const triggerDelay = Math.round(accumulatedMs);
+        const timer = setTimeout(() => {
+          if (
+            this.activeUtteranceId !== utteranceId ||
+            !isPlayingCheck() ||
+            !this.isSpeaking
+          ) {
+            return;
+          }
+          if (wordGlobalIndex > this.lastReportedWordIndex) {
+            this.lastReportedWordIndex = wordGlobalIndex;
+            onWordSync(wordGlobalIndex);
+          }
+        }, triggerDelay);
+        this.farsiWordTimers.push(timer);
+      }
+
+      accumulatedMs += wordShareMs;
+    }
+
+    try {
+      this.activeFarsiPlaybackHandle = await playAudioBlob(synthResult.wavBlob, {
+        volume: effectiveVolume,
+        onStart: () => {
+          if (
+            this.activeUtteranceId !== utteranceId ||
+            !isPlayingCheck() ||
+            !this.isSpeaking
+          ) {
+            this.activeFarsiPlaybackHandle?.stop();
+          }
+        },
+        onEnd: () => {
+          this.clearFarsiWordTimers();
+          this.activeFarsiPlaybackHandle = null;
+
+          if (
+            this.activeUtteranceId !== utteranceId ||
+            !isPlayingCheck() ||
+            !this.isSpeaking
+          ) {
+            return;
+          }
+
+          if (this.lastReportedWordIndex < chunkEndIndex) {
+            this.lastReportedWordIndex = chunkEndIndex;
+            onWordSync(chunkEndIndex);
+          }
+
+          const nextIndex = chunkEndIndex + 1;
+          if (nextIndex < effectiveTotalWords) {
+            const lastWord = chunkWords[chunkWords.length - 1];
+            const pauseDelay = lastWord?.hasSentenceEnd ? 120 : (lastWord?.hasClausePause ? 60 : 25);
+            this.chunkTransitionTimer = setTimeout(() => {
+              if (
+                this.activeUtteranceId !== utteranceId ||
+                !isPlayingCheck() ||
+                !this.isSpeaking
+              ) {
+                return;
+              }
+              this.advanceToNextChunk(
+                nextIndex,
+                settings,
+                onWordSync,
+                onFinished,
+                isPlayingCheck,
+                utteranceId,
+                getCurrentWpm,
+                getWordsSlice,
+                effectiveTotalWords
+              );
+            }, pauseDelay);
+          } else {
+            this.isSpeaking = false;
+            onFinished();
+          }
+        },
+        onError: (err) => {
+          this.clearFarsiWordTimers();
+          this.activeFarsiPlaybackHandle = null;
+          console.warn('Farsi audio playback error:', err);
+          if (this.activeUtteranceId !== utteranceId || !isPlayingCheck() || !this.isSpeaking) return;
+
+          const nextIndex = chunkEndIndex + 1;
+          if (nextIndex < effectiveTotalWords) {
+            this.advanceToNextChunk(
+              nextIndex,
+              settings,
+              onWordSync,
+              onFinished,
+              isPlayingCheck,
+              utteranceId,
+              getCurrentWpm,
+              getWordsSlice,
+              effectiveTotalWords
+            );
+          } else {
+            this.isSpeaking = false;
+            onFinished();
+          }
+        },
+      });
+    } catch (playErr) {
+      console.warn('playAudioBlob thrown:', playErr);
+      this.clearFarsiWordTimers();
+      this.activeFarsiPlaybackHandle = null;
+      if (this.activeUtteranceId !== utteranceId || !isPlayingCheck() || !this.isSpeaking) return;
+
+      const nextIndex = chunkEndIndex + 1;
+      if (nextIndex < effectiveTotalWords) {
+        this.advanceToNextChunk(
+          nextIndex,
+          settings,
+          onWordSync,
+          onFinished,
+          isPlayingCheck,
+          utteranceId,
+          getCurrentWpm,
+          getWordsSlice,
+          effectiveTotalWords
+        );
+      } else {
+        this.isSpeaking = false;
+        onFinished();
+      }
+    }
+  }
+
+  private advanceToNextChunk(
+    nextIndex: number,
+    settings: ReaderSettings,
+    onWordSync: WordSyncCallback,
+    onFinished: FinishedCallback,
+    isPlayingCheck: () => boolean,
+    utteranceId: number,
+    getCurrentWpm?: () => number,
+    getWordsSlice?: (startIndex: number, count: number) => Promise<HighlightedWordParts[]>,
+    effectiveTotalWords?: number,
+  ): void {
+    if (getWordsSlice) {
+      getWordsSlice(nextIndex, 30).then((nextSlice) => {
+        if (nextSlice.length > 0 && isPlayingCheck() && this.isSpeaking && this.activeUtteranceId === utteranceId) {
+          this.speakFromIndex({
+            words: nextSlice,
+            startIndex: nextIndex,
+            settings,
+            onWordSync,
+            onFinished,
+            isPlayingCheck,
+            getCurrentWpm,
+            getWordsSlice,
+            totalWords: effectiveTotalWords,
+          });
+        } else {
+          this.isSpeaking = false;
+          onFinished();
+        }
+      }).catch(() => {
+        this.isSpeaking = false;
+        onFinished();
+      });
+    } else {
+      this.speakFromIndex({
+        words: this.currentWordsReference,
+        startIndex: nextIndex,
+        settings,
+        onWordSync,
+        onFinished,
+        isPlayingCheck,
+        getCurrentWpm,
+        getWordsSlice,
+        totalWords: effectiveTotalWords,
+      });
+    }
   }
 
   /**
