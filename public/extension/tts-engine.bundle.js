@@ -4386,9 +4386,11 @@ var AdhdReaderTts = (() => {
   // src/services/tts/offscreenBridge.ts
   var offscreenBridge_exports = {};
   __export(offscreenBridge_exports, {
+    CustomTtsEngine: () => CustomTtsEngine,
     EspeakEngine: () => EspeakEngine,
     PIPER_CACHE_VERSION: () => PIPER_CACHE_VERSION,
     PiperEngine: () => PiperEngine,
+    customTtsEngine: () => customTtsEngine,
     encodePcmWav: () => encodePcmWav,
     espeakEngine: () => espeakEngine,
     farsiOfflineTts: () => farsiOfflineTts,
@@ -4396,8 +4398,15 @@ var AdhdReaderTts = (() => {
     indexedDbModelStore: () => indexedDbModelStore,
     normalizePersianText: () => normalizePersianText,
     phonemesToPiperTokens: () => phonemesToPiperTokens,
-    piperEngine: () => piperEngine
+    piperEngine: () => piperEngine,
+    splitIntoSentences: () => splitIntoSentences
   });
+
+  // src/services/tts/types.ts
+  var FARSI_TTS_ENGINES = ["espeak", "piper", "custom"];
+  function isFarsiTtsEngine(value) {
+    return typeof value === "string" && FARSI_TTS_ENGINES.includes(value);
+  }
 
   // src/services/tts/phonemizer/persianNormalizer.ts
   var ARABIC_TO_PERSIAN_MAP = {
@@ -4409,7 +4418,6 @@ var AdhdReaderTts = (() => {
     "\u0624": "\u0648",
     "\u0625": "\u0627",
     "\u0623": "\u0627",
-    "\u0621": "\u0626",
     "\u0640": ""
     // Tatweel
   };
@@ -4463,15 +4471,92 @@ var AdhdReaderTts = (() => {
     text = charNormalized;
     text = text.replace(/ـ+/g, "");
     const persianLetters = "[\u0627\u0628\u067E\u062A\u062B\u062C\u0686\u062D\u062E\u062F\u0630\u0631\u0632\u0698\u0633\u0634\u0635\u0636\u0637\u0638\u0639\u063A\u0641\u0642\u06A9\u06AF\u0644\u0645\u0646\u0648\u0647\u06CC]";
-    const prefixRegex = new RegExp(`(^|\\s)\u0645\u06CC(?=${persianLetters}{2,})`, "g");
-    const negPrefixRegex = new RegExp(`(^|\\s)\u0646\u0645\u06CC(?=${persianLetters}{2,})`, "g");
-    text = text.replace(prefixRegex, "$1\u0645\u06CC\u200C");
-    text = text.replace(negPrefixRegex, "$1\u0646\u0645\u06CC\u200C");
-    const suffixRegex = new RegExp(`(${persianLetters}{2,})(\u0647\u0627|\u0647\u0627\u06CC|\u0647\u0627\u06CC\u06CC|\u062A\u0631|\u062A\u0631\u06CC\u0646)(?=[.,!?;:\u060C\u061B\u061F\\s]|$)`, "g");
+    const miVerbStems = [
+      "\u0631\u0648\u0645",
+      "\u0631\u0648\u06CC",
+      "\u0631\u0648\u062F",
+      "\u0631\u0648\u0646\u062F",
+      "\u062A\u0648\u0627\u0646\u0645",
+      "\u062A\u0648\u0627\u0646\u06CC",
+      "\u062A\u0648\u0627\u0646\u062F",
+      "\u062A\u0648\u0627\u0646\u0646\u062F",
+      "\u062F\u0627\u0646\u0645",
+      "\u062F\u0627\u0646\u06CC",
+      "\u062F\u0627\u0646\u062F",
+      "\u062F\u0627\u0646\u0646\u062F",
+      "\u062E\u0648\u0627\u0647\u0645",
+      "\u062E\u0648\u0627\u0647\u06CC",
+      "\u062E\u0648\u0627\u0647\u062F",
+      "\u062E\u0648\u0627\u0647\u0646\u062F",
+      "\u06AF\u0648\u06CC\u0645",
+      "\u06AF\u0648\u06CC\u06CC",
+      "\u06AF\u0648\u06CC\u062F",
+      "\u06AF\u0648\u06CC\u0646\u062F",
+      "\u0628\u06CC\u0646\u0645",
+      "\u0628\u06CC\u0646\u06CC",
+      "\u0628\u06CC\u0646\u062F",
+      "\u0628\u06CC\u0646\u0646\u062F",
+      "\u06A9\u0646\u0645",
+      "\u06A9\u0646\u06CC",
+      "\u06A9\u0646\u062F",
+      "\u06A9\u0646\u0646\u062F",
+      "\u0634\u0648\u0645",
+      "\u0634\u0648\u06CC",
+      "\u0634\u0648\u062F",
+      "\u0634\u0648\u0646\u062F",
+      "\u0622\u06CC\u0645",
+      "\u0622\u06CC\u06CC",
+      "\u0622\u06CC\u062F",
+      "\u0622\u06CC\u0646\u062F",
+      "\u062F\u0647\u0645",
+      "\u062F\u0647\u06CC",
+      "\u062F\u0647\u062F",
+      "\u062F\u0647\u0646\u062F",
+      "\u0628\u0627\u0634\u0645",
+      "\u0628\u0627\u0634\u06CC",
+      "\u0628\u0627\u0634\u062F",
+      "\u0628\u0627\u0634\u0646\u062F",
+      "\u06AF\u06CC\u0631\u0645",
+      "\u06AF\u06CC\u0631\u06CC",
+      "\u06AF\u06CC\u0631\u062F",
+      "\u06AF\u06CC\u0631\u0646\u062F",
+      "\u062F\u0627\u0631\u0645",
+      "\u062F\u0627\u0631\u06CC",
+      "\u062F\u0627\u0631\u062F",
+      "\u062F\u0627\u0631\u0646\u062F"
+    ].join("|");
+    const prefixRegex = new RegExp(`(^|\\s)(\u0646?\u0645\u06CC)(${miVerbStems})(?=$|[\\s.,!?;:\u060C\u061B\u061F])`, "g");
+    text = text.replace(prefixRegex, "$1$2\u200C$3");
+    const suffixRegex = new RegExp(`(${persianLetters}{2,})(\u0647\u0627|\u0647\u0627\u06CC|\u0647\u0627\u06CC\u06CC)(?=[.,!?;:\u060C\u061B\u061F\\s]|$)`, "g");
     text = text.replace(suffixRegex, "$1\u200C$2");
     text = text.replace(/\u200C+/g, "\u200C").replace(/(^|[\s.,!?;:،؛؟"\(\)\[\]{}])\u200C+/g, "$1").replace(/\u200C+([\s.,!?;:،؛؟"\(\)\[\]{}]|$)/g, "$1");
-    text = text.replace(/[\t\r\n]+/g, " ").replace(/ +/g, " ").trim();
+    text = text.replace(/([0-9۰-۹])\.(?=[0-9۰-۹])/g, "$1 \u0645\u0645\u06CC\u0632 ");
+    text = text.replace(/[ \t\r\n]+/g, " ").replace(/ +/g, " ").trim();
     return text;
+  }
+  function splitIntoSentences(text, maxLen = 220) {
+    if (!text) return [];
+    const raw = text.match(/[^.!?؟…]+[.!?؟…]*/g) || [text];
+    const out = [];
+    for (const piece of raw) {
+      const t = piece.trim();
+      if (!t) continue;
+      if (t.length <= maxLen) {
+        out.push(t);
+        continue;
+      }
+      let buf = "";
+      for (const part of t.split(/(?<=[,;:،؛])\s+/)) {
+        if (buf && (buf + " " + part).length > maxLen) {
+          out.push(buf);
+          buf = part;
+        } else {
+          buf = buf ? `${buf} ${part}` : part;
+        }
+      }
+      if (buf) out.push(buf);
+    }
+    return out;
   }
 
   // node_modules/espeak-phonemizer/dist/wasm/espeak-ng.mjs
@@ -7481,13 +7566,10 @@ var AdhdReaderTts = (() => {
     }
     const result = [bosToken];
     for (const id of validTokenIds) {
+      result.push(id);
       if (interspersePad) {
         result.push(padToken);
       }
-      result.push(id);
-    }
-    if (interspersePad) {
-      result.push(padToken);
     }
     result.push(eosToken);
     return result;
@@ -7551,7 +7633,7 @@ var AdhdReaderTts = (() => {
           return "";
         }
         const phonemeParts = clauses.map((c) => {
-          const p = (c.phonemes || "").trim();
+          const p = (c.phonemes || "").replace(/\([a-z]{2,3}(?:-[a-z0-9]+)?\)/gi, "").replace(/\s+/g, " ").trim();
           const term = (c.terminator || "").trim();
           return term ? `${p}${term}` : p;
         });
@@ -7957,6 +8039,9 @@ var AdhdReaderTts = (() => {
         ampVal.toString(),
         "-w",
         outFileName,
+        // `--` ends option parsing so text starting with '-' (e.g. "-5 درجه") is not
+        // misinterpreted as a CLI flag (which crashes eSpeak with ENOENT).
+        "--",
         normalized
       ];
       try {
@@ -8630,7 +8715,7 @@ var AdhdReaderTts = (() => {
       this.engineType = "piper";
       this.session = null;
       this.modelConfig = null;
-      this.isInitializing = false;
+      this.initPromise = null;
       this.lastInitError = null;
       this.isCurrentlySpeaking = false;
       this.sampleRate = 22050;
@@ -8659,61 +8744,60 @@ var AdhdReaderTts = (() => {
      */
     async init() {
       if (this.session) return true;
-      if (this.isInitializing) return false;
-      this.isInitializing = true;
+      if (this.initPromise) return this.initPromise;
       this.lastInitError = null;
-      try {
-        const cached = await indexedDbModelStore.getModel(DEFAULT_PIPER_MODEL_NAME);
-        if (!cached || !cached.onnxBytes || cached.onnxBytes.byteLength < 5e3) {
-          this.isInitializing = false;
-          this.lastInitError = {
-            message: "Piper neural model not cached in IndexedDB",
-            category: "STORAGE_FAILED"
+      this.initPromise = (async () => {
+        try {
+          const cached = await indexedDbModelStore.getModel(DEFAULT_PIPER_MODEL_NAME);
+          if (!cached || !cached.onnxBytes || cached.onnxBytes.byteLength < 5e3) {
+            this.lastInitError = {
+              message: "Piper neural model not cached in IndexedDB",
+              category: "STORAGE_FAILED"
+            };
+            return false;
+          }
+          const validation = validatePiperModelConfig(cached.config, DEFAULT_PIPER_MODEL_NAME);
+          if (!validation.valid || !validation.config) {
+            console.error("Piper model initialization failed: invalid config in IndexedDB:", validation.error);
+            this.lastInitError = {
+              message: `parse failed: ${validation.error || "invalid config in IndexedDB"}`,
+              category: "PARSE_FAILED"
+            };
+            return false;
+          }
+          this.modelConfig = validation.config;
+          if (this.modelConfig?.audio?.sample_rate) {
+            this.sampleRate = this.modelConfig.audio.sample_rate;
+          }
+          const ort = await getOrt();
+          if (!ort || !ort.InferenceSession) {
+            console.warn("ONNX Runtime unavailable in environment");
+            this.lastInitError = {
+              message: "model initialization failed: ONNX Runtime Web unavailable in environment",
+              category: "INIT_FAILED"
+            };
+            return false;
+          }
+          const sessionOptions = {
+            executionProviders: ["wasm"],
+            graphOptimizationLevel: "all"
           };
-          return false;
-        }
-        const validation = validatePiperModelConfig(cached.config, DEFAULT_PIPER_MODEL_NAME);
-        if (!validation.valid || !validation.config) {
-          console.error("Piper model initialization failed: invalid config in IndexedDB:", validation.error);
-          this.isInitializing = false;
+          this.session = await ort.InferenceSession.create(cached.onnxBytes, sessionOptions);
+          console.log("\u2713 Piper Farsi ONNX Inference Session initialized (100% offline)");
+          return true;
+        } catch (err) {
+          console.warn("Could not initialize Piper ONNX session, fallback available:", err);
+          this.session = null;
           this.lastInitError = {
-            message: `parse failed: ${validation.error || "invalid config in IndexedDB"}`,
-            category: "PARSE_FAILED"
-          };
-          return false;
-        }
-        this.modelConfig = validation.config;
-        if (this.modelConfig?.audio?.sample_rate) {
-          this.sampleRate = this.modelConfig.audio.sample_rate;
-        }
-        const ort = await getOrt();
-        if (!ort || !ort.InferenceSession) {
-          console.warn("ONNX Runtime unavailable in environment");
-          this.isInitializing = false;
-          this.lastInitError = {
-            message: "model initialization failed: ONNX Runtime Web unavailable in environment",
+            message: `model initialization failed: ${err?.message || "ONNX session creation error"}`,
             category: "INIT_FAILED"
           };
           return false;
+        } finally {
+          this.initPromise = null;
         }
-        const sessionOptions = {
-          executionProviders: ["wasm", "cpu"],
-          graphOptimizationLevel: "all"
-        };
-        this.session = await ort.InferenceSession.create(cached.onnxBytes, sessionOptions);
-        this.isInitializing = false;
-        console.log("\u2713 Piper Farsi ONNX Inference Session initialized (100% offline)");
-        return true;
-      } catch (err) {
-        console.warn("Could not initialize Piper ONNX session, fallback available:", err);
-        this.session = null;
-        this.isInitializing = false;
-        this.lastInitError = {
-          message: `model initialization failed: ${err?.message || "ONNX session creation error"}`,
-          category: "INIT_FAILED"
-        };
-        return false;
-      }
+      })();
+      return this.initPromise;
     }
     isModelReady() {
       return this.session !== null;
@@ -8754,37 +8838,28 @@ var AdhdReaderTts = (() => {
         }
         const speed = Math.max(0.5, Math.min(2, options.speed ?? 1));
         const phonemeMap = this.modelConfig?.phoneme_id_map || void 0;
-        const tokens = await farsiTextToPiperTokens(normalized, phonemeMap);
-        if (!tokens || tokens.length <= 2) {
-          throw new Error("Tokenization resulted in empty token sequence");
+        const sentences = splitIntoSentences(normalized);
+        const sentenceAudio = [];
+        for (const sentence of sentences) {
+          const tokens = await farsiTextToPiperTokens(sentence, phonemeMap);
+          if (!tokens || tokens.length <= 2) {
+            throw new Error("Tokenization resulted in empty token sequence");
+          }
+          sentenceAudio.push(await this.runInference(tokens, speed, ort));
         }
-        const tokenArray = BigInt64Array.from(tokens.map((t) => BigInt(t)));
-        const inputTensor = new ort.Tensor("int64", tokenArray, [1, tokens.length]);
-        const inputLengthsTensor = new ort.Tensor("int64", BigInt64Array.from([BigInt(tokens.length)]), [1]);
-        const noiseScale = this.modelConfig?.inference?.noise_scale ?? 0.667;
-        const lengthScale = (this.modelConfig?.inference?.length_scale ?? 1) / speed;
-        const noiseW = this.modelConfig?.inference?.noise_w ?? 0.8;
-        const scalesTensor = new ort.Tensor("float32", new Float32Array([noiseScale, lengthScale, noiseW]), [3]);
-        const feeds = {
-          input: inputTensor,
-          input_lengths: inputLengthsTensor,
-          scales: scalesTensor
-        };
-        if (this.session.inputNames && this.session.inputNames.includes("sid")) {
-          feeds["sid"] = new ort.Tensor("int64", BigInt64Array.from([BigInt(0)]), [1]);
+        const silenceSamples = Math.floor(this.sampleRate * 0.25);
+        const totalSamples = sentenceAudio.reduce((acc, s) => acc + s.length, 0) + silenceSamples * Math.max(0, sentenceAudio.length - 1);
+        const combined = new Float32Array(totalSamples);
+        let offset = 0;
+        for (let i = 0; i < sentenceAudio.length; i++) {
+          combined.set(sentenceAudio[i], offset);
+          offset += sentenceAudio[i].length;
+          if (i < sentenceAudio.length - 1) {
+            offset += silenceSamples;
+          }
         }
-        const results = await this.session.run(feeds);
-        const outputTensor = this.session.outputNames && results[this.session.outputNames[0]] || results.output;
-        if (!outputTensor) {
-          return {
-            success: false,
-            engineUsed: "piper",
-            error: "Piper inference returned empty audio output tensor"
-          };
-        }
-        const rawFloatData = extractPiperAudioSamples(outputTensor);
-        const wavBlob = encodePcmWav(rawFloatData, this.sampleRate);
-        const durationMs = Math.round(rawFloatData.length / this.sampleRate * 1e3);
+        const wavBlob = encodePcmWav(combined, this.sampleRate);
+        const durationMs = Math.round(combined.length / this.sampleRate * 1e3);
         return {
           success: true,
           engineUsed: "piper",
@@ -8801,6 +8876,32 @@ var AdhdReaderTts = (() => {
           errorCategory: "INFERENCE_FAILED"
         };
       }
+    }
+    /**
+     * Runs a single ONNX inference pass for one tokenized sentence and returns raw float samples.
+     */
+    async runInference(tokens, speed, ort) {
+      const tokenArray = BigInt64Array.from(tokens.map((t) => BigInt(t)));
+      const inputTensor = new ort.Tensor("int64", tokenArray, [1, tokens.length]);
+      const inputLengthsTensor = new ort.Tensor("int64", BigInt64Array.from([BigInt(tokens.length)]), [1]);
+      const noiseScale = this.modelConfig?.inference?.noise_scale ?? 0.667;
+      const lengthScale = (this.modelConfig?.inference?.length_scale ?? 1) / speed;
+      const noiseW = this.modelConfig?.inference?.noise_w ?? 0.8;
+      const scalesTensor = new ort.Tensor("float32", new Float32Array([noiseScale, lengthScale, noiseW]), [3]);
+      const feeds = {
+        input: inputTensor,
+        input_lengths: inputLengthsTensor,
+        scales: scalesTensor
+      };
+      if (this.session.inputNames && this.session.inputNames.includes("sid")) {
+        feeds["sid"] = new ort.Tensor("int64", BigInt64Array.from([BigInt(0)]), [1]);
+      }
+      const results = await this.session.run(feeds);
+      const outputTensor = this.session.outputNames && results[this.session.outputNames[0]] || results.output;
+      if (!outputTensor) {
+        throw new Error("Piper inference returned empty audio output tensor");
+      }
+      return Float32Array.from(extractPiperAudioSamples(outputTensor));
     }
     /**
      * Synthesize Farsi text into audio.
@@ -9024,6 +9125,253 @@ var AdhdReaderTts = (() => {
     }
   };
 
+  // src/services/tts/customTtsConfig.ts
+  var CUSTOM_TTS_STORAGE_KEY = "adhd_reader_farsi_custom_tts_config";
+  function hasChromeStorage() {
+    return typeof chrome !== "undefined" && !!chrome.runtime?.id && !!chrome.storage?.local;
+  }
+  function isPrivateHost(hostname) {
+    const h = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    if (h === "localhost" || h.endsWith(".localhost") || h === "::1") return true;
+    const m = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+    if (!m) return false;
+    const [a, b] = [Number(m[1]), Number(m[2])];
+    return a === 127 || a === 10 || a === 192 && b === 168 || a === 172 && b >= 16 && b <= 31;
+  }
+  function validateCustomTtsConfig(input) {
+    if (!input) return { valid: false, error: "Custom TTS is not configured" };
+    const baseUrl = String(input.baseUrl ?? "").trim().replace(/\/+$/, "");
+    const apiKey = String(input.apiKey ?? "").trim();
+    const model = String(input.model ?? "").trim();
+    const voice = String(input.voice ?? "").trim();
+    const format = input.format === "wav" ? "wav" : "mp3";
+    if (!baseUrl) return { valid: false, error: "Base URL is required" };
+    let url;
+    try {
+      url = new URL(baseUrl);
+    } catch {
+      return { valid: false, error: "Base URL is not a valid URL" };
+    }
+    if (url.protocol !== "https:" && url.protocol !== "http:") {
+      return { valid: false, error: "Base URL must start with https:// (or http:// for localhost)" };
+    }
+    if (url.protocol === "http:" && !isPrivateHost(url.hostname)) {
+      return { valid: false, error: "Plain http:// is only allowed for localhost / private-network servers. Use https://" };
+    }
+    if (url.username || url.password) {
+      return { valid: false, error: "Do not embed credentials in the URL \u2014 use the API key field" };
+    }
+    if (!apiKey && !isPrivateHost(url.hostname)) {
+      return { valid: false, error: "API key is required for this endpoint" };
+    }
+    if (/[\r\n]/.test(apiKey)) return { valid: false, error: "API key contains invalid characters" };
+    if (!model) return { valid: false, error: "Model is required" };
+    if (!voice) return { valid: false, error: "Voice is required" };
+    return { valid: true, config: { baseUrl, apiKey, model, voice, format } };
+  }
+  async function loadCustomTtsConfig() {
+    try {
+      if (hasChromeStorage()) {
+        const res = await chrome.storage.local.get([CUSTOM_TTS_STORAGE_KEY]);
+        const stored = res?.[CUSTOM_TTS_STORAGE_KEY];
+        return stored && typeof stored === "object" ? stored : null;
+      }
+      const raw = safeStorage.getItem(CUSTOM_TTS_STORAGE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // src/services/tts/customTtsEngine.ts
+  var CUSTOM_TTS_TIMEOUT_MS = 3e4;
+  var CUSTOM_TTS_MAX_CHARS = 4096;
+  function buildSpeechUrl(baseUrl) {
+    const trimmed = baseUrl.replace(/\/+$/, "");
+    return /\/audio\/speech$/.test(trimmed) ? trimmed : `${trimmed}/audio/speech`;
+  }
+  function scrub(message, apiKey) {
+    let out = message;
+    if (apiKey) out = out.split(apiKey).join("***");
+    return out.replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/g, "Bearer ***").slice(0, 300);
+  }
+  var CustomTtsEngine = class {
+    constructor() {
+      this.name = "Custom TTS (user endpoint)";
+      this.engineType = "custom";
+      this.isCurrentlySpeaking = false;
+      this.currentPlaybackHandle = null;
+      this.inflight = null;
+      this.fetcher = null;
+      this.configOverride = null;
+    }
+    /** Test seam */
+    setFetcherForTesting(f) {
+      this.fetcher = f;
+    }
+    /** Test seam / explicit config (e.g. "Test connection" button before saving) */
+    setConfigOverride(cfg) {
+      this.configOverride = cfg;
+    }
+    async initialize() {
+    }
+    async init() {
+      const cfg = this.configOverride ?? await loadCustomTtsConfig();
+      return validateCustomTtsConfig(cfg).valid;
+    }
+    fail(error, errorCategory) {
+      return {
+        success: false,
+        wavBlob: new Blob([], { type: "audio/wav" }),
+        durationMs: 0,
+        sampleRate: 0,
+        engineUsed: "custom",
+        fallbackTriggered: false,
+        error,
+        errorCategory
+      };
+    }
+    async synthesize(text, options = {}) {
+      const stored = this.configOverride ?? await loadCustomTtsConfig();
+      if (!stored) return this.fail("Custom TTS is not configured", "NOT_CONFIGURED");
+      const validation = validateCustomTtsConfig(stored);
+      if (validation.valid === false) return this.fail(validation.error, "INVALID_CONFIG");
+      const cfg = validation.config;
+      const input = normalizePersianText(text) || text.trim();
+      if (!input) {
+        return { ...this.fail("", "EMPTY_AUDIO"), success: true, error: void 0, errorCategory: void 0 };
+      }
+      if (input.length > CUSTOM_TTS_MAX_CHARS) {
+        return this.fail(`Text too long for custom TTS (${input.length} > ${CUSTOM_TTS_MAX_CHARS} chars)`, "INVALID_CONFIG");
+      }
+      this.inflight?.abort();
+      const controller = new AbortController();
+      this.inflight = controller;
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, CUSTOM_TTS_TIMEOUT_MS);
+      const speed = Math.max(0.25, Math.min(4, options.speed ?? 1));
+      const doFetch = this.fetcher ?? ((input2, init) => fetch(input2, init));
+      try {
+        const headers = { "Content-Type": "application/json" };
+        if (cfg.apiKey) headers["Authorization"] = `Bearer ${cfg.apiKey}`;
+        let res;
+        try {
+          res = await doFetch(buildSpeechUrl(cfg.baseUrl), {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              model: cfg.model,
+              voice: cfg.voice,
+              input,
+              speed,
+              response_format: cfg.format
+            }),
+            signal: controller.signal,
+            credentials: "omit",
+            referrerPolicy: "no-referrer"
+          });
+        } catch (netErr) {
+          if (timedOut) return this.fail(`Custom TTS request timed out after ${CUSTOM_TTS_TIMEOUT_MS / 1e3}s`, "TIMEOUT");
+          if (controller.signal.aborted) return this.fail("Custom TTS request cancelled", "NETWORK_ERROR");
+          return this.fail(`Custom TTS network error: ${scrub(String(netErr?.message || netErr), cfg.apiKey)}`, "NETWORK_ERROR");
+        }
+        if (!res.ok) {
+          let detail = "";
+          try {
+            detail = scrub((await res.text()).replace(/\s+/g, " ").trim(), cfg.apiKey);
+          } catch {
+          }
+          if (res.status === 401 || res.status === 403) {
+            return this.fail(`Custom TTS rejected the API key (HTTP ${res.status})${detail ? `: ${detail}` : ""}`, "AUTH_FAILED");
+          }
+          if (res.status === 429) {
+            return this.fail(`Custom TTS rate limit hit (HTTP 429)${detail ? `: ${detail}` : ""}`, "RATE_LIMITED");
+          }
+          return this.fail(`Custom TTS HTTP ${res.status}${detail ? `: ${detail}` : ""}`, "HTTP_ERROR");
+        }
+        const buf = await res.arrayBuffer();
+        if (buf.byteLength < 44) {
+          return this.fail("Custom TTS returned no audio data", "EMPTY_AUDIO");
+        }
+        const ct = (res.headers.get("content-type") || "").toLowerCase();
+        if (ct.includes("json") || ct.startsWith("text/")) {
+          return this.fail("Custom TTS returned a non-audio response (check model/voice/base URL)", "EMPTY_AUDIO");
+        }
+        const wav = validateWavBuffer(buf);
+        const mime = wav.valid ? "audio/wav" : cfg.format === "wav" ? "audio/wav" : "audio/mpeg";
+        const sampleRate = wav.valid ? wav.sampleRate ?? 0 : 0;
+        const durationMs = wav.valid && wav.sampleRate && wav.bitsPerSample && wav.numChannels && wav.dataByteLength ? Math.round(wav.dataByteLength / (wav.sampleRate * wav.numChannels * (wav.bitsPerSample / 8)) * 1e3) : 0;
+        return {
+          success: true,
+          wavBlob: new Blob([buf], { type: mime }),
+          durationMs,
+          sampleRate,
+          engineUsed: "custom",
+          fallbackTriggered: false
+        };
+      } finally {
+        clearTimeout(timer);
+        if (this.inflight === controller) this.inflight = null;
+      }
+    }
+    async speak(text, options = {}) {
+      this.stop();
+      this.isCurrentlySpeaking = true;
+      try {
+        const res = await this.synthesize(text, options);
+        if (!res.success) {
+          this.isCurrentlySpeaking = false;
+          options.onError?.(new Error(res.error || "Custom TTS failed"));
+          return;
+        }
+        await this.playWavBlob(res.wavBlob, options);
+      } catch (err) {
+        this.isCurrentlySpeaking = false;
+        options.onError?.(err);
+      }
+    }
+    async playWavBlob(blob, options = {}) {
+      this.stop();
+      this.isCurrentlySpeaking = true;
+      this.currentPlaybackHandle = await playAudioBlob(blob, {
+        volume: options.volume ?? 1,
+        onStart: () => options.onStart?.(),
+        onEnd: () => {
+          this.isCurrentlySpeaking = false;
+          this.currentPlaybackHandle = null;
+          options.onEnd?.();
+        },
+        onError: (err) => {
+          this.isCurrentlySpeaking = false;
+          this.currentPlaybackHandle = null;
+          options.onError?.(err);
+        }
+      });
+    }
+    stop() {
+      this.inflight?.abort();
+      this.inflight = null;
+      if (this.currentPlaybackHandle) {
+        try {
+          this.currentPlaybackHandle.stop();
+        } catch {
+        }
+        this.currentPlaybackHandle = null;
+      }
+      this.isCurrentlySpeaking = false;
+    }
+    dispose() {
+      this.stop();
+    }
+    isSpeaking() {
+      return this.isCurrentlySpeaking;
+    }
+  };
+  var customTtsEngine = new CustomTtsEngine();
+
   // src/services/tts/farsiOfflineTTS.ts
   var STORAGE_KEY_ENGINE = "adhd_reader_farsi_tts_engine";
   var SAMPLE_FARSI_TEXT = "\u0627\u06CC\u0646 \u06CC\u06A9 \u0622\u0632\u0645\u0627\u06CC\u0634 \u0628\u0631\u0627\u06CC \u0633\u06CC\u0633\u062A\u0645 \u062A\u0628\u062F\u06CC\u0644 \u0645\u062A\u0646 \u0628\u0647 \u06AF\u0641\u062A\u0627\u0631 \u0622\u0641\u0644\u0627\u06CC\u0646 \u0641\u0627\u0631\u0633\u06CC \u0627\u0633\u062A.";
@@ -9060,7 +9408,7 @@ var AdhdReaderTts = (() => {
       }
       if (state === "STARTED" || state === "PLAYING") {
         this.isSpeakingActive = true;
-        this.activeCallbacks?.onStart?.();
+        this.activeCallbacks?.onStart?.({ durationMs: msg.durationMs });
         this.notify();
       } else if (state === "ENDED") {
         this.isSpeakingActive = false;
@@ -9084,12 +9432,12 @@ var AdhdReaderTts = (() => {
       if (typeof window === "undefined") return;
       try {
         const savedEngine = safeStorage.getItem(STORAGE_KEY_ENGINE);
-        if (savedEngine === "espeak" || savedEngine === "piper") {
+        if (savedEngine && isFarsiTtsEngine(savedEngine)) {
           this.activeEngine = savedEngine;
         }
         if (typeof chrome !== "undefined" && chrome.storage?.local) {
           chrome.storage.local.get(["farsiTtsEngine"], (res) => {
-            if (res?.farsiTtsEngine === "espeak" || res?.farsiTtsEngine === "piper") {
+            if (res?.farsiTtsEngine && isFarsiTtsEngine(res.farsiTtsEngine)) {
               this.activeEngine = res.farsiTtsEngine;
               this.notify();
             }
@@ -9124,8 +9472,19 @@ var AdhdReaderTts = (() => {
     isExtensionContext() {
       return typeof chrome !== "undefined" && !!chrome.runtime && !!chrome.runtime.id && typeof chrome.runtime.sendMessage === "function";
     }
+    /**
+     * True when executing inside the offscreen document itself. In that context the manager is driven
+     * directly by offscreen.js, so it must NOT send runtime messages (which would loop back into it).
+     */
+    isOffscreenContext() {
+      try {
+        return typeof window !== "undefined" && typeof window.location !== "undefined" && /offscreen\.html(\?|#|$)/.test(window.location.href);
+      } catch {
+        return false;
+      }
+    }
     sendExtensionMessage(payload) {
-      if (!this.isExtensionContext()) {
+      if (!this.isExtensionContext() || this.isOffscreenContext()) {
         return Promise.resolve({ success: false, reason: "not_extension" });
       }
       return new Promise((resolve) => {
@@ -9166,6 +9525,24 @@ var AdhdReaderTts = (() => {
           fallbackTriggered: true,
           fallbackReason: reason
         };
+      } else if (engineType === "custom") {
+        const customResult = await customTtsEngine.synthesize(text, options);
+        if (customResult.success) {
+          return customResult;
+        }
+        if (options.allowFallback === false) {
+          return customResult;
+        }
+        const reason = customResult.error || "Custom TTS endpoint failed";
+        console.warn(`[FarsiOfflineTtsManager] Custom TTS failed (${reason}). Falling back to eSpeak NG WASM.`);
+        options.onFallback?.(reason);
+        const fallbackResult = await espeakEngine.synthesize(text, options);
+        return {
+          ...fallbackResult,
+          engineUsed: "espeak",
+          fallbackTriggered: true,
+          fallbackReason: reason
+        };
       } else {
         return espeakEngine.synthesize(text, options);
       }
@@ -9183,7 +9560,7 @@ var AdhdReaderTts = (() => {
       const engineType = options.engine || this.activeEngine;
       if (this.isExtensionContext()) {
         try {
-          const res = await this.sendExtensionMessage({
+          const payload = {
             action: "SPEAK",
             type: "SPEAK",
             text,
@@ -9193,12 +9570,15 @@ var AdhdReaderTts = (() => {
             volume: options.volume ?? 1,
             allowFallback: options.allowFallback ?? true,
             playbackId
-          });
+          };
+          if (engineType === "custom") {
+            payload.customConfig = await loadCustomTtsConfig() ?? null;
+          }
+          const res = await this.sendExtensionMessage(payload);
           if (res && res.success) {
             if (res.fallbackTriggered && res.fallbackReason) {
               options.onFallback?.(res.fallbackReason);
             }
-            options.onStart?.();
             return;
           } else if (res && !res.success) {
             this.isSpeakingActive = false;
@@ -9213,9 +9593,9 @@ var AdhdReaderTts = (() => {
       }
       const wrappedOptions = {
         ...options,
-        onStart: () => {
+        onStart: (info) => {
           if (this.currentPlayingId === playbackId) {
-            options.onStart?.();
+            options.onStart?.(info);
           }
         },
         onEnd: () => {
@@ -9239,6 +9619,9 @@ var AdhdReaderTts = (() => {
         }
       };
       const synthResult = await this.synthesize(text, options);
+      if (this.currentPlayingId !== playbackId) {
+        return;
+      }
       if (!synthResult.success || !synthResult.wavBlob) {
         this.isSpeakingActive = false;
         this.activeCallbacks = null;
@@ -9249,7 +9632,7 @@ var AdhdReaderTts = (() => {
       if (synthResult.fallbackTriggered && synthResult.fallbackReason) {
         options.onFallback?.(synthResult.fallbackReason);
       }
-      const activeEngineInstance = synthResult.engineUsed === "piper" ? piperEngine : espeakEngine;
+      const activeEngineInstance = synthResult.engineUsed === "piper" ? piperEngine : synthResult.engineUsed === "custom" ? customTtsEngine : espeakEngine;
       await activeEngineInstance.playWavBlob(synthResult.wavBlob, wrappedOptions);
     }
     /**
@@ -9261,6 +9644,7 @@ var AdhdReaderTts = (() => {
       this.activeCallbacks = null;
       espeakEngine.stop();
       piperEngine.stop();
+      customTtsEngine.stop();
       if (this.isExtensionContext()) {
         this.sendExtensionMessage({
           action: "STOP",
@@ -9293,7 +9677,7 @@ var AdhdReaderTts = (() => {
       };
     }
     isSpeaking() {
-      return this.isSpeakingActive || espeakEngine.isSpeaking() || piperEngine.isSpeaking();
+      return this.isSpeakingActive || espeakEngine.isSpeaking() || piperEngine.isSpeaking() || customTtsEngine.isSpeaking();
     }
     /**
      * IndexedDB Model Management for Piper Neural
@@ -9337,14 +9721,17 @@ var AdhdReaderTts = (() => {
     g.farsiOfflineTts = farsiOfflineTts;
     g.piperEngine = piperEngine;
     g.espeakEngine = espeakEngine;
+    g.customTtsEngine = customTtsEngine;
     g.PiperEngine = PiperEngine;
     g.EspeakEngine = EspeakEngine;
+    g.CustomTtsEngine = CustomTtsEngine;
     g.farsiPhonemizer = farsiPhonemizer;
     g.encodePcmWav = encodePcmWav;
     g.encodePcmWavBuffer = encodePcmWavBuffer;
     g.validateWavBuffer = validateWavBuffer;
     g.playAudioBlob = playAudioBlob;
     g.normalizePersianText = normalizePersianText;
+    g.splitIntoSentences = splitIntoSentences;
     g.phonemesToPiperTokens = phonemesToPiperTokens;
     g.indexedDbModelStore = indexedDbModelStore;
     g.PIPER_CACHE_VERSION = PIPER_CACHE_VERSION;

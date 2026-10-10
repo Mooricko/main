@@ -97,8 +97,10 @@ describe('1. Persian Text Normalization & Preprocessing', () => {
     const textPersian = normalizePersianText('تلفن ۱۲۳');
     assert.ok(textPersian.includes('۱۲۳') || textPersian.includes('123'), 'Digits preserved for phonemizer');
 
+    // A decimal separator between digits is expanded to "ممیز" so eSpeak reads it aloud
+    // correctly instead of emitting the junk phoneme sequence seen with a literal '.'.
     const decimal = normalizePersianText('نسخه 2.0');
-    assert.ok(decimal.includes('2.0') || decimal.includes('۲.۰'), 'Decimals preserved');
+    assert.ok(decimal.includes('2 ممیز 0') || decimal.includes('۲ ممیز ۰'), 'Decimal separator spoken as "ممیز"');
   });
 
   it('should handle mixed Persian and Latin scripts and Persian punctuation', () => {

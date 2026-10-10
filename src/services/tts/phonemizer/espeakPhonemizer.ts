@@ -88,7 +88,9 @@ class EspeakFarsiPhonemizer implements FarsiPhonemizer {
 
       // Concatenate clause phonemes with clause terminators
       const phonemeParts = clauses.map((c) => {
-        const p = (c.phonemes || '').trim();
+        // eSpeak inserts language-switch flags such as "(en)" / "(fa)" around foreign words.
+        // They are not phonemes: leaving them in makes Piper pronounce the letters "e", "n", "f", "a".
+        const p = (c.phonemes || '').replace(/\([a-z]{2,3}(?:-[a-z0-9]+)?\)/gi, '').replace(/\s+/g, ' ').trim();
         const term = (c.terminator || '').trim();
         return term ? `${p}${term}` : p;
       });

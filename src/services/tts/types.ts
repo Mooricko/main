@@ -3,7 +3,36 @@
  * (Piper ONNX & eSpeak NG WASM)
  */
 
-export type FarsiTtsEngineType = 'espeak' | 'piper';
+export type FarsiTtsEngineType = 'espeak' | 'piper' | 'custom';
+
+export const FARSI_TTS_ENGINES: readonly FarsiTtsEngineType[] = ['espeak', 'piper', 'custom'];
+
+export function isFarsiTtsEngine(value: unknown): value is FarsiTtsEngineType {
+  return typeof value === 'string' && (FARSI_TTS_ENGINES as readonly string[]).includes(value);
+}
+
+/**
+ * User-supplied (bring-your-own) TTS endpoint configuration.
+ * Targets any OpenAI-compatible `POST {baseUrl}/audio/speech` API
+ * (OpenAI, Kokoro-FastAPI, openedai-speech, LocalAI, Azure/OpenRouter proxies, ...).
+ */
+export interface CustomTtsConfig {
+  baseUrl: string; // e.g. https://api.openai.com/v1
+  apiKey: string; // sent as `Authorization: Bearer <key>`; never logged
+  model: string; // e.g. tts-1, gpt-4o-mini-tts
+  voice: string; // provider voice id, e.g. alloy
+  format: 'wav' | 'mp3'; // response_format requested from the provider
+}
+
+export type CustomTtsErrorCategory =
+  | 'NOT_CONFIGURED'
+  | 'INVALID_CONFIG'
+  | 'AUTH_FAILED'
+  | 'RATE_LIMITED'
+  | 'HTTP_ERROR'
+  | 'NETWORK_ERROR'
+  | 'TIMEOUT'
+  | 'EMPTY_AUDIO';
 
 export type TtsLifecycleState =
   | 'IDLE'
@@ -27,7 +56,7 @@ export interface FarsiTtsOptions {
   volume?: number; // 0.0 to 1.0 (default 1.0)
   allowFallback?: boolean; // whether to invoke fallback on failure (default true)
   playbackId?: number; // internal utterance id to prevent stale event collisions
-  onStart?: () => void;
+  onStart?: (info?: { durationMs?: number }) => void;
   onEnd?: () => void;
   onError?: (err: Error) => void;
   onFallback?: (reason: string) => void;
@@ -57,7 +86,7 @@ export interface SynthesisResult {
   fallbackTriggered?: boolean;
   fallbackReason?: string;
   error?: string;
-  errorCategory?: PiperErrorCategory;
+  errorCategory?: PiperErrorCategory | CustomTtsErrorCategory;
 }
 
 export type TtsResult = SynthesisResult;
@@ -108,7 +137,8 @@ export type TtsActionType =
   | 'SET_ENGINE'
   | 'STATUS_CHANGED'
   | 'DOWNLOAD_PIPER'
-  | 'CLEAR_PIPER_CACHE';
+  | 'CLEAR_PIPER_CACHE'
+  | 'CUSTOM_CONFIG_CHANGED';
 
 export interface TtsMessageBase {
   type?: TtsActionType | string;
