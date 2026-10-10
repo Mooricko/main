@@ -213,6 +213,9 @@ export class EspeakEngine implements TtsEngine, FarsiEspeak {
       '-p', pitchVal.toString(),
       '-a', ampVal.toString(),
       '-w', outFileName,
+      // `--` ends option parsing so text starting with '-' (e.g. "-5 درجه") is not
+      // misinterpreted as a CLI flag (which crashes eSpeak with ENOENT).
+      '--',
       normalized
     ];
 

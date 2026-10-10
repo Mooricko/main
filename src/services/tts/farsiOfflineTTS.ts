@@ -12,11 +12,13 @@
  * - Full standalone in-browser support with IndexedDB caching
  */
 
-import { FarsiTtsEngineType, FarsiTtsOptions, SynthesisResult, PiperCacheInfo } from './types';
+import { FarsiTtsEngineType, FarsiTtsOptions, SynthesisResult, PiperCacheInfo, isFarsiTtsEngine, CustomTtsConfig } from './types';
 import { espeakEngine } from './espeakEngine';
 import { piperEngine } from './piperEngine';
+import { customTtsEngine } from './customTtsEngine';
 import { indexedDbModelStore } from './indexedDbModelStore';
 import { safeStorage } from '../../utils/safeStorage';
+import { loadCustomTtsConfig } from './customTtsConfig';
 
 const STORAGE_KEY_ENGINE = 'adhd_reader_farsi_tts_engine';
 const STORAGE_KEY_SPEED = 'adhd_reader_farsi_tts_speed';
@@ -62,7 +64,7 @@ class FarsiOfflineTtsManager {
 
     if (state === 'STARTED' || state === 'PLAYING') {
       this.isSpeakingActive = true;
-      this.activeCallbacks?.onStart?.();
+      this.activeCallbacks?.onStart?.({ durationMs: msg.durationMs });
       this.notify();
     } else if (state === 'ENDED') {
       this.isSpeakingActive = false;
@@ -87,14 +89,14 @@ class FarsiOfflineTtsManager {
     if (typeof window === 'undefined') return;
     try {
       const savedEngine = safeStorage.getItem(STORAGE_KEY_ENGINE) as FarsiTtsEngineType | null;
-      if (savedEngine === 'espeak' || savedEngine === 'piper') {
+      if (savedEngine && isFarsiTtsEngine(savedEngine)) {
         this.activeEngine = savedEngine;
       }
 
       // Check if Chrome Extension storage has a preference
       if (typeof chrome !== 'undefined' && chrome.storage?.local) {
         chrome.storage.local.get(['farsiTtsEngine'], (res) => {
-          if (res?.farsiTtsEngine === 'espeak' || res?.farsiTtsEngine === 'piper') {
+          if (res?.farsiTtsEngine && isFarsiTtsEngine(res.farsiTtsEngine)) {
             this.activeEngine = res.farsiTtsEngine;
             this.notify();
           }
@@ -143,8 +145,20 @@ class FarsiOfflineTtsManager {
     );
   }
 
+  /**
+   * True when executing inside the offscreen document itself. In that context the manager is driven
+   * directly by offscreen.js, so it must NOT send runtime messages (which would loop back into it).
+   */
+  public isOffscreenContext(): boolean {
+    try {
+      return typeof window !== 'undefined' && typeof window.location !== 'undefined' && /offscreen\.html(\?|#|$)/.test(window.location.href);
+    } catch {
+      return false;
+    }
+  }
+
   private sendExtensionMessage(payload: any): Promise<any> {
-    if (!this.isExtensionContext()) {
+    if (!this.isExtensionContext() || this.isOffscreenContext()) {
       return Promise.resolve({ success: false, reason: 'not_extension' });
     }
     return new Promise((resolve) => {
@@ -192,6 +206,25 @@ class FarsiOfflineTtsManager {
         fallbackTriggered: true,
         fallbackReason: reason,
       };
+    } else if (engineType === 'custom') {
+      // User's own endpoint. Fall back to eSpeak unless the caller disabled fallback.
+      const customResult = await customTtsEngine.synthesize(text, options);
+      if (customResult.success) {
+        return customResult;
+      }
+      if (options.allowFallback === false) {
+        return customResult;
+      }
+      const reason = customResult.error || 'Custom TTS endpoint failed';
+      console.warn(`[FarsiOfflineTtsManager] Custom TTS failed (${reason}). Falling back to eSpeak NG WASM.`);
+      options.onFallback?.(reason);
+      const fallbackResult = await espeakEngine.synthesize(text, options);
+      return {
+        ...fallbackResult,
+        engineUsed: 'espeak',
+        fallbackTriggered: true,
+        fallbackReason: reason,
+      };
     } else {
       return espeakEngine.synthesize(text, options);
     }
@@ -215,7 +248,7 @@ class FarsiOfflineTtsManager {
     // 2. If running inside Chrome Extension with offscreen support, delegate via message
     if (this.isExtensionContext()) {
       try {
-        const res = await this.sendExtensionMessage({
+        const payload: any = {
           action: 'SPEAK',
           type: 'SPEAK',
           text,
@@ -225,13 +258,19 @@ class FarsiOfflineTtsManager {
           volume: options.volume ?? 1.0,
           allowFallback: options.allowFallback ?? true,
           playbackId,
-        });
+        };
+        // The offscreen document cannot read chrome.storage, so hand it the custom config.
+        if (engineType === 'custom') {
+          payload.customConfig = (await loadCustomTtsConfig()) ?? null;
+        }
+        const res = await this.sendExtensionMessage(payload);
 
         if (res && res.success) {
+          // onStart is delivered by the STATUS_CHANGED (STARTED/PLAYING) event, not here,
+          // to avoid firing twice and to carry the synthesized duration.
           if (res.fallbackTriggered && res.fallbackReason) {
             options.onFallback?.(res.fallbackReason);
           }
-          options.onStart?.();
           return;
         } else if (res && !res.success) {
           this.isSpeakingActive = false;
@@ -248,9 +287,9 @@ class FarsiOfflineTtsManager {
     // 3. In-browser direct speech playback via manager synthesis
     const wrappedOptions: FarsiTtsOptions = {
       ...options,
-      onStart: () => {
+      onStart: (info) => {
         if (this.currentPlayingId === playbackId) {
-          options.onStart?.();
+          options.onStart?.(info);
         }
       },
       onEnd: () => {
@@ -275,6 +314,12 @@ class FarsiOfflineTtsManager {
     };
 
     const synthResult = await this.synthesize(text, options);
+
+    // A stop() or a newer speak() superseded this utterance while synthesis was running.
+    if (this.currentPlayingId !== playbackId) {
+      return;
+    }
+
     if (!synthResult.success || !synthResult.wavBlob) {
       this.isSpeakingActive = false;
       this.activeCallbacks = null;
@@ -287,7 +332,12 @@ class FarsiOfflineTtsManager {
       options.onFallback?.(synthResult.fallbackReason);
     }
 
-    const activeEngineInstance = synthResult.engineUsed === 'piper' ? piperEngine : espeakEngine;
+    const activeEngineInstance =
+      synthResult.engineUsed === 'piper'
+        ? piperEngine
+        : synthResult.engineUsed === 'custom'
+          ? customTtsEngine
+          : espeakEngine;
     await activeEngineInstance.playWavBlob(synthResult.wavBlob, wrappedOptions);
   }
 
@@ -302,6 +352,7 @@ class FarsiOfflineTtsManager {
     // Stop local engines
     espeakEngine.stop();
     piperEngine.stop();
+    customTtsEngine.stop();
 
     // Stop extension offscreen audio
     if (this.isExtensionContext()) {
@@ -337,7 +388,7 @@ class FarsiOfflineTtsManager {
   }
 
   public isSpeaking(): boolean {
-    return this.isSpeakingActive || espeakEngine.isSpeaking() || piperEngine.isSpeaking();
+    return this.isSpeakingActive || espeakEngine.isSpeaking() || piperEngine.isSpeaking() || customTtsEngine.isSpeaking();
   }
 
   /**

@@ -90,13 +90,22 @@
 
   // Central Chrome Extension Message Dispatcher
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    const action = message.action || message.type;
-    if (message.target !== 'OFFSCREEN_TTS' && !['SPEAK', 'STOP', 'SET_ENGINE', 'GET_STATUS', 'GET_TTS_STATUS'].includes(action)) {
+    // Only act on messages the background service worker explicitly routed to us. This avoids
+    // double-handling: the page's untargeted SPEAK/STOP/... broadcast reaches every extension
+    // context, including this offscreen document.
+    if (message.target !== 'OFFSCREEN_TTS') {
       return false;
     }
 
+    const action = message.action || message.type;
+
     switch (action) {
       case 'SPEAK': {
+        // Apply user's custom (BYO) endpoint config, if this is a custom-engine utterance.
+        const ctts = window.customTtsEngine;
+        if (ctts && typeof ctts.setConfigOverride === 'function') {
+          ctts.setConfigOverride(message.customConfig || null);
+        }
         const text = message.text || '';
         const engine = message.engine || activeEngineType;
         const speed = message.speed ?? 1.0;
@@ -196,14 +205,11 @@
       }
 
       case 'SET_ENGINE': {
-        if (message.engine === 'piper' || message.engine === 'espeak') {
+        if (message.engine === 'piper' || message.engine === 'espeak' || message.engine === 'custom') {
           activeEngineType = message.engine;
           const manager = getManager();
           if (manager) {
             manager.setEngine(activeEngineType);
-          }
-          if (chrome.storage?.local) {
-            chrome.storage.local.set({ farsiTtsEngine: activeEngineType });
           }
         }
         sendResponse({ success: true, activeEngine: activeEngineType });
@@ -222,6 +228,18 @@
           }
         });
         return false;
+      }
+
+      case 'PRECACHE_PIPER': {
+        const manager = getManager();
+        if (!manager || typeof manager.downloadPiperModel !== 'function') {
+          sendResponse({ success: false, error: 'TTS manager not ready' });
+          return false;
+        }
+        manager.downloadPiperModel()
+          .then((ok) => sendResponse({ success: ok, error: ok ? undefined : 'Piper model download failed' }))
+          .catch((err) => sendResponse({ success: false, error: err?.message || 'Piper model download failed' }));
+        return true; // async
       }
 
       default:

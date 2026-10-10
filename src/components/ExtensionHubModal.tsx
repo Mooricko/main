@@ -27,7 +27,7 @@ import { THEME_CONFIGS, HIGHLIGHT_COLORS } from '../utils/themeStyles';
 import { downloadExtensionPackage } from '../utils/extensionPacker';
 import { isChromeExtensionEnvironment, captureActiveTabText } from '../utils/extensionBridge';
 import { farsiOfflineTts, SAMPLE_FARSI_TEXT } from '../services/tts/farsiOfflineTTS';
-import { PiperCacheInfo } from '../services/tts/types';
+import { PiperCacheInfo, FarsiTtsEngineType } from '../services/tts/types';
 
 const KEYBOARD_SHORTCUTS = [
   { key: 'Space', desc: 'Play / Pause reader (or resume after Smart Auto-Pause)' },
@@ -75,7 +75,7 @@ export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
   >('contentJs');
 
   // Offline Farsi TTS Testing State
-  const [activeEngine, setActiveEngine] = useState<'espeak' | 'piper'>('espeak');
+  const [activeEngine, setActiveEngine] = useState<FarsiTtsEngineType>('espeak');
   const [piperCache, setPiperCache] = useState<PiperCacheInfo>({
     status: 'not_cached',
     modelName: 'fa_IR-amir-medium',
@@ -880,7 +880,7 @@ export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
   );
 };
 
-function getCodeSnippet(type: 'manifest' | 'background' | 'offscreenHtml' | 'offscreenJs' | 'espeakJs' | 'piperJs' | 'contentJs' | 'contentCss'): string {
+function getCodeSnippet(type: 'manifest' | 'background' | 'offscreenHtml' | 'offscreenJs' | 'espeakJs' | 'piperJs' | 'ttsBundle' | 'contentJs' | 'contentCss'): string {
   switch (type) {
     case 'manifest':
       return `{

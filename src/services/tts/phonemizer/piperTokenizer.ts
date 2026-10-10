@@ -98,18 +98,16 @@ export function phonemesToPiperTokens(
     }
   }
 
-  // Assemble token sequence with BOS, EOS, and optional interspersing PAD
+  // Assemble token sequence exactly like upstream Piper (phoneme_ids / phonemes_to_ids):
+  //   BOS, p1, PAD, p2, PAD, ..., pn, PAD, EOS
+  // PAD follows each phoneme; there is NO PAD directly after BOS.
   const result: number[] = [bosToken];
 
   for (const id of validTokenIds) {
+    result.push(id);
     if (interspersePad) {
       result.push(padToken);
     }
-    result.push(id);
-  }
-
-  if (interspersePad) {
-    result.push(padToken);
   }
 
   result.push(eosToken);
