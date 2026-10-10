@@ -7,16 +7,23 @@
  * if WASM compilation is unavailable, or if memory limits are exceeded.
  */
 
-import { FarsiTtsOptions, SynthesisResult, TtsEngineInterface } from './types';
+import { FarsiTtsOptions, SynthesisResult, PiperDirectResult, TtsEngine } from './types';
 import { indexedDbModelStore, DEFAULT_PIPER_MODEL_NAME } from './indexedDbModelStore';
-import { farsiTextToPiperTokens, encodePcmWav, normalizeFarsiText } from './farsiPhonemizer';
-import { espeakEngine } from './espeakEngine';
+import { farsiTextToPiperTokens, normalizeFarsiText } from './farsiPhonemizer';
+import { extractPiperAudioSamples, encodePcmWav, playAudioBlob, AudioPlaybackHandle } from './audioUtils';
+import { validatePiperModelConfig } from './modelValidation';
 
 // Lazy loader for onnxruntime-web to avoid premature WASM instantiation on app load
 let cachedOrtModule: any = null;
 let ortLoadPromise: Promise<any> | null = null;
 
-async function getOrt(): Promise<any> {
+export async function getOrt(): Promise<any> {
+  // Check globalThis.ort first (e.g. Chrome Extension offscreen or pre-loaded script)
+  if (typeof (globalThis as any).ort !== 'undefined' && (globalThis as any).ort?.InferenceSession) {
+    cachedOrtModule = (globalThis as any).ort;
+    return cachedOrtModule;
+  }
+
   if (cachedOrtModule) return cachedOrtModule;
   if (ortLoadPromise) return ortLoadPromise;
 
@@ -24,8 +31,12 @@ async function getOrt(): Promise<any> {
     try {
       const ort = await import('onnxruntime-web');
       if (ort?.env?.wasm) {
-        // Safe thread and SIMD configuration without premature instantiation
-        ort.env.wasm.numThreads = Math.min(2, Math.max(1, (navigator.hardwareConcurrency || 2) - 1));
+        if (typeof chrome !== 'undefined' && chrome.runtime?.getURL) {
+          ort.env.wasm.wasmPaths = chrome.runtime.getURL('');
+        } else {
+          ort.env.wasm.wasmPaths = '/';
+        }
+        ort.env.wasm.numThreads = Math.min(2, Math.max(1, (typeof navigator !== 'undefined' ? navigator.hardwareConcurrency : 2) || 2) - 1);
         ort.env.wasm.simd = true;
       }
       cachedOrtModule = ort;
@@ -41,39 +52,40 @@ async function getOrt(): Promise<any> {
   return ortLoadPromise;
 }
 
-export class PiperEngine implements TtsEngineInterface {
+export class PiperEngine implements TtsEngine {
   public readonly name = 'Piper Neural (ONNX Web)';
   public readonly engineType = 'piper' as const;
 
   private session: any = null;
   private modelConfig: any = null;
   private isInitializing: boolean = false;
-  private audioCtx: AudioContext | null = null;
-  private currentSource: AudioBufferSourceNode | null = null;
-  private currentGain: GainNode | null = null;
+  private lastInitError: { message: string; category?: any } | null = null;
   private isCurrentlySpeaking: boolean = false;
   private sampleRate: number = 22050;
+  private currentPlaybackHandle: AudioPlaybackHandle | null = null;
 
   constructor() {
     // No eager initialization to prevent premature WASM instantiation or network fetches
   }
 
-  private getAudioContext(): AudioContext | null {
-    if (this.audioCtx && this.audioCtx.state !== 'closed') {
-      if (this.audioCtx.state === 'suspended') {
-        this.audioCtx.resume().catch(() => {});
+  /**
+   * Inject mock session and config for testing and regression suites
+   */
+  public setSessionForTesting(mockSession: any, mockConfig?: any): void {
+    this.session = mockSession;
+    if (mockConfig) {
+      this.modelConfig = mockConfig;
+      if (mockConfig.audio?.sample_rate) {
+        this.sampleRate = mockConfig.audio.sample_rate;
       }
-      return this.audioCtx;
     }
+  }
 
-    if (typeof window !== 'undefined') {
-      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-      if (AudioContextClass) {
-        this.audioCtx = new AudioContextClass();
-        return this.audioCtx;
-      }
-    }
-    return null;
+  /**
+   * Standard initialize method
+   */
+  public async initialize(): Promise<void> {
+    await this.init();
   }
 
   /**
@@ -84,15 +96,32 @@ export class PiperEngine implements TtsEngineInterface {
     if (this.isInitializing) return false;
 
     this.isInitializing = true;
+    this.lastInitError = null;
     try {
       // 1. Check local offline cache first: do NOT load ONNX if model is not present in IndexedDB
       const cached = await indexedDbModelStore.getModel(DEFAULT_PIPER_MODEL_NAME);
       if (!cached || !cached.onnxBytes || cached.onnxBytes.byteLength < 5000) {
         this.isInitializing = false;
+        this.lastInitError = {
+          message: 'Piper neural model not cached in IndexedDB',
+          category: 'STORAGE_FAILED',
+        };
         return false;
       }
 
-      this.modelConfig = cached.config;
+      // Validate config
+      const validation = validatePiperModelConfig(cached.config, DEFAULT_PIPER_MODEL_NAME);
+      if (!validation.valid || !validation.config) {
+        console.error('Piper model initialization failed: invalid config in IndexedDB:', validation.error);
+        this.isInitializing = false;
+        this.lastInitError = {
+          message: `parse failed: ${validation.error || 'invalid config in IndexedDB'}`,
+          category: 'PARSE_FAILED',
+        };
+        return false;
+      }
+
+      this.modelConfig = validation.config;
       if (this.modelConfig?.audio?.sample_rate) {
         this.sampleRate = this.modelConfig.audio.sample_rate;
       }
@@ -100,7 +129,12 @@ export class PiperEngine implements TtsEngineInterface {
       // 2. Lazily load ONNX Runtime Web
       const ort = await getOrt();
       if (!ort || !ort.InferenceSession) {
+        console.warn('ONNX Runtime unavailable in environment');
         this.isInitializing = false;
+        this.lastInitError = {
+          message: 'model initialization failed: ONNX Runtime Web unavailable in environment',
+          category: 'INIT_FAILED',
+        };
         return false;
       }
 
@@ -114,10 +148,14 @@ export class PiperEngine implements TtsEngineInterface {
       this.isInitializing = false;
       console.log('✓ Piper Farsi ONNX Inference Session initialized (100% offline)');
       return true;
-    } catch (err) {
+    } catch (err: any) {
       console.warn('Could not initialize Piper ONNX session, fallback available:', err);
       this.session = null;
       this.isInitializing = false;
+      this.lastInitError = {
+        message: `model initialization failed: ${err?.message || 'ONNX session creation error'}`,
+        category: 'INIT_FAILED',
+      };
       return false;
     }
   }
@@ -127,22 +165,17 @@ export class PiperEngine implements TtsEngineInterface {
   }
 
   /**
-   * Synthesize Farsi text into audio.
-   * If Piper is not ready or errors out, automatically falls back to eSpeak NG WASM!
+   * Direct Piper ONNX synthesis without fallback invocation.
+   * Returns explicit success: true with Piper wavBlob or success: false with error.
    */
-  public async synthesize(text: string, options: FarsiTtsOptions = {}): Promise<SynthesisResult> {
+  public async synthesizeDirect(text: string, options: FarsiTtsOptions = {}): Promise<PiperDirectResult> {
     const isReady = await this.init();
-
-    // Graceful Fallback if model not downloaded / cached or session failed
     if (!isReady || !this.session) {
-      const reason = 'Piper neural model not cached in IndexedDB or initialization failed. Falling back to eSpeak NG WASM.';
-      options.onFallback?.(reason);
-
-      const fallbackResult = await espeakEngine.synthesize(text, options);
       return {
-        ...fallbackResult,
-        fallbackTriggered: true,
-        fallbackReason: reason,
+        success: false,
+        engineUsed: 'piper',
+        error: this.lastInitError?.message || 'ONNX Runtime unavailable or Piper neural model not cached in IndexedDB',
+        errorCategory: this.lastInitError?.category || 'INIT_FAILED',
       };
     }
 
@@ -151,20 +184,30 @@ export class PiperEngine implements TtsEngineInterface {
       if (!normalized) {
         const emptySamples = new Float32Array(0);
         return {
+          success: true,
+          engineUsed: 'piper',
           wavBlob: encodePcmWav(emptySamples, this.sampleRate),
           durationMs: 0,
           sampleRate: this.sampleRate,
-          engineUsed: 'piper',
-          fallbackTriggered: false,
         };
       }
 
       const ort = await getOrt();
-      if (!ort) throw new Error('ONNX runtime unavailable');
+      if (!ort) {
+        return {
+          success: false,
+          engineUsed: 'piper',
+          error: 'ONNX Runtime unavailable',
+        };
+      }
 
       const speed = Math.max(0.5, Math.min(2.0, options.speed ?? 1.0));
       const phonemeMap = this.modelConfig?.phoneme_id_map || undefined;
-      const tokens = farsiTextToPiperTokens(normalized, phonemeMap);
+      const tokens = await farsiTextToPiperTokens(normalized, phonemeMap);
+
+      if (!tokens || tokens.length <= 2) {
+        throw new Error('Tokenization resulted in empty token sequence');
+      }
 
       // Prepare tensors
       const tokenArray = BigInt64Array.from(tokens.map((t) => BigInt(t)));
@@ -192,33 +235,72 @@ export class PiperEngine implements TtsEngineInterface {
       const results = await this.session.run(feeds);
       const outputTensor = (this.session.outputNames && results[this.session.outputNames[0]]) || results.output;
 
-      if (!outputTensor || !outputTensor.data) {
-        throw new Error('Piper inference returned empty audio output');
+      if (!outputTensor) {
+        return {
+          success: false,
+          engineUsed: 'piper',
+          error: 'Piper inference returned empty audio output tensor',
+        };
       }
 
-      const rawFloatData = outputTensor.data as Float32Array;
+      // Extract raw audio samples
+      const rawFloatData = extractPiperAudioSamples(outputTensor);
+
+      // Encode directly to RIFF PCM WAV using shared audioUtils
       const wavBlob = encodePcmWav(rawFloatData, this.sampleRate);
       const durationMs = Math.round((rawFloatData.length / this.sampleRate) * 1000);
 
       return {
+        success: true,
+        engineUsed: 'piper',
         wavBlob,
         durationMs,
         sampleRate: this.sampleRate,
+      };
+    } catch (inferenceErr: any) {
+      console.warn('Piper inference error:', inferenceErr);
+      return {
+        success: false,
+        engineUsed: 'piper',
+        error: `inference failed: ${inferenceErr?.message || 'Piper inference error'}`,
+        errorCategory: 'INFERENCE_FAILED',
+      };
+    }
+  }
+
+  /**
+   * Synthesize Farsi text into audio.
+   * PiperEngine ONLY synthesizes via Piper neural model.
+   * If Piper succeeds, returns honest Piper WAV audio.
+   * If Piper is unavailable or fails, returns success: false with error details.
+   * It NEVER secretly invokes eSpeak fallback — the FarsiOfflineTtsManager is in charge of fallback!
+   */
+  public async synthesize(text: string, options: FarsiTtsOptions = {}): Promise<SynthesisResult> {
+    const directRes = await this.synthesizeDirect(text, options);
+
+    // 1. Piper succeeded: return honest Piper audio
+    if (directRes.success && directRes.wavBlob) {
+      return {
+        success: true,
+        wavBlob: directRes.wavBlob,
+        durationMs: directRes.durationMs ?? 0,
+        sampleRate: directRes.sampleRate ?? this.sampleRate,
         engineUsed: 'piper',
         fallbackTriggered: false,
       };
-    } catch (inferenceErr: any) {
-      console.warn('Piper inference error, falling back to eSpeak NG:', inferenceErr);
-      const reason = `Piper inference failure (${inferenceErr?.message || 'unknown'}). Falling back to eSpeak NG WASM.`;
-      options.onFallback?.(reason);
-
-      const fallbackResult = await espeakEngine.synthesize(text, options);
-      return {
-        ...fallbackResult,
-        fallbackTriggered: true,
-        fallbackReason: reason,
-      };
     }
+
+    // 2. Piper failed or unavailable: honest failure reporting
+    return {
+      success: false,
+      wavBlob: encodePcmWav(new Float32Array(0), this.sampleRate),
+      durationMs: 0,
+      sampleRate: this.sampleRate,
+      engineUsed: 'piper',
+      fallbackTriggered: false,
+      error: directRes.error || 'Piper neural synthesis unavailable or model not cached',
+      errorCategory: directRes.errorCategory,
+    };
   }
 
   /**
@@ -226,72 +308,70 @@ export class PiperEngine implements TtsEngineInterface {
    */
   public async speak(text: string, options: FarsiTtsOptions = {}): Promise<void> {
     this.stop();
-
-    const ctx = this.getAudioContext();
-    if (!ctx) {
-      options.onError?.(new Error('AudioContext not available'));
-      return;
-    }
+    this.isCurrentlySpeaking = true;
 
     try {
-      options.onStart?.();
-      this.isCurrentlySpeaking = true;
-
-      const { wavBlob } = await this.synthesize(text, options);
-      const arrayBuffer = await wavBlob.arrayBuffer();
-      const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
-
-      const source = ctx.createBufferSource();
-      source.buffer = audioBuffer;
-
-      const gain = ctx.createGain();
-      gain.gain.value = Math.max(0, Math.min(1, options.volume ?? 1.0));
-
-      source.connect(gain);
-      gain.connect(ctx.destination);
-
-      this.currentSource = source;
-      this.currentGain = gain;
-
-      source.onended = () => {
+      const result = await this.synthesize(text, options);
+      if (!result.success || !result.wavBlob) {
         this.isCurrentlySpeaking = false;
-        this.currentSource = null;
-        options.onEnd?.();
-      };
+        options.onError?.(new Error(result.error || 'Piper audio synthesis produced no audio data'));
+        return;
+      }
 
-      source.start(0);
+      await this.playWavBlob(result.wavBlob, options);
     } catch (err: any) {
       this.isCurrentlySpeaking = false;
-      this.currentSource = null;
+      this.currentPlaybackHandle = null;
       options.onError?.(err);
       throw err;
     }
   }
 
+  /**
+   * Helper to play an already-synthesized WAV blob
+   */
+  public async playWavBlob(blob: Blob, options: FarsiTtsOptions = {}): Promise<void> {
+    this.stop();
+    this.isCurrentlySpeaking = true;
+
+    this.currentPlaybackHandle = await playAudioBlob(blob, {
+      volume: options.volume ?? 1.0,
+      onStart: () => {
+        options.onStart?.();
+      },
+      onEnd: () => {
+        this.isCurrentlySpeaking = false;
+        this.currentPlaybackHandle = null;
+        options.onEnd?.();
+      },
+      onError: (err) => {
+        this.isCurrentlySpeaking = false;
+        this.currentPlaybackHandle = null;
+        options.onError?.(err);
+      },
+    });
+  }
+
   public stop(): void {
-    if (this.currentSource) {
+    if (this.currentPlaybackHandle) {
       try {
-        this.currentSource.stop(0);
-        this.currentSource.disconnect();
-      } catch {
-        // ignore
-      }
-      this.currentSource = null;
-    }
-    if (this.currentGain) {
-      try {
-        this.currentGain.disconnect();
-      } catch {
-        // ignore
-      }
-      this.currentGain = null;
+        this.currentPlaybackHandle.stop();
+      } catch {}
+      this.currentPlaybackHandle = null;
     }
     this.isCurrentlySpeaking = false;
-    espeakEngine.stop();
+  }
+
+  public dispose(): void {
+    this.stop();
+    if (this.session && typeof this.session.release === 'function') {
+      try { this.session.release(); } catch {}
+    }
+    this.session = null;
   }
 
   public isSpeaking(): boolean {
-    return this.isCurrentlySpeaking || espeakEngine.isSpeaking();
+    return this.isCurrentlySpeaking;
   }
 }
 

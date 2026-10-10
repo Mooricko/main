@@ -5,12 +5,14 @@
  * Once cached in IndexedDB, no external network calls are made.
  */
 
-import { PiperCacheInfo } from './types';
+import { PiperCacheInfo, PiperErrorCategory } from './types';
+import { validatePiperModelConfig, validatePiperModelBytes, PiperModelConfig } from './modelValidation';
 
 const DB_NAME = 'AdhdReader_FarsiTTS_Models';
 const DB_VERSION = 1;
 const STORE_NAME = 'models';
 export const DEFAULT_PIPER_MODEL_NAME = 'fa_IR-amir-medium';
+export const PIPER_CACHE_VERSION = 'v2.1.0';
 
 // Canonical HuggingFace repository for Piper Farsi Voice
 const MODEL_BASE_URL = 'https://huggingface.co/rhasspy/piper-voices/resolve/main/fa/fa_IR/amir/medium';
@@ -20,6 +22,7 @@ const JSON_FILENAME = 'fa_IR-amir-medium.onnx.json';
 interface StoredModelRecord {
   id: string; // e.g. 'fa_IR-amir-medium'
   modelName: string;
+  cacheVersion?: string;
   onnxBytes: ArrayBuffer;
   configJson: string;
   sizeBytes: number;
@@ -31,6 +34,7 @@ class IndexedDbModelStore {
   private currentProgress: number = 0;
   private currentStatus: 'not_cached' | 'downloading' | 'ready' | 'error' = 'not_cached';
   private errorMessage?: string;
+  private errorCategory?: PiperErrorCategory;
   private listeners: Set<(info: PiperCacheInfo) => void> = new Set();
 
   private getDB(): Promise<IDBDatabase> {
@@ -79,46 +83,97 @@ class IndexedDbModelStore {
     try {
       const db = await this.getDB();
       return new Promise((resolve) => {
-        const tx = db.transaction(STORE_NAME, 'readonly');
+        const tx = db.transaction(STORE_NAME, 'readwrite');
         const store = tx.objectStore(STORE_NAME);
         const req = store.get(modelId);
 
         req.onsuccess = () => {
           const record = req.result as StoredModelRecord | undefined;
-          if (record && record.onnxBytes && record.onnxBytes.byteLength > 1000) {
-            this.currentStatus = 'ready';
-            const info: PiperCacheInfo = {
-              status: 'ready',
-              modelName: record.modelName || modelId,
-              sizeBytes: record.sizeBytes || record.onnxBytes.byteLength,
-              downloadProgress: 100,
-              lastUpdated: record.timestamp,
-              isOfflineReady: true,
-            };
-            this.notify(info);
-            resolve(info);
-          } else {
-            this.currentStatus = this.currentStatus === 'downloading' ? 'downloading' : 'not_cached';
-            const info: PiperCacheInfo = {
-              status: this.currentStatus,
-              modelName: modelId,
-              sizeBytes: 0,
-              downloadProgress: this.currentProgress,
-              errorMessage: this.errorMessage,
-              isOfflineReady: false,
-            };
-            this.notify(info);
-            resolve(info);
+          if (record && record.onnxBytes) {
+            // Check cache version: if obsolete, invalidate and evict safely
+            if (record.cacheVersion !== PIPER_CACHE_VERSION) {
+              console.warn(
+                `[IndexedDbModelStore] Evicting outdated Piper cache (version ${record.cacheVersion || 'v1'} vs expected ${PIPER_CACHE_VERSION})`
+              );
+              try { store.delete(modelId); } catch {}
+              this.currentStatus = 'not_cached';
+              const info: PiperCacheInfo = {
+                status: 'not_cached',
+                modelName: modelId,
+                sizeBytes: 0,
+                downloadProgress: 0,
+                cacheVersion: PIPER_CACHE_VERSION,
+                isOfflineReady: false,
+              };
+              this.notify(info);
+              return resolve(info);
+            }
+
+            const bytesValidation = validatePiperModelBytes(record.onnxBytes);
+            const configValidation = validatePiperModelConfig(record.configJson, modelId);
+
+            if (bytesValidation.valid && configValidation.valid) {
+              this.currentStatus = 'ready';
+              this.errorMessage = undefined;
+              this.errorCategory = undefined;
+              const info: PiperCacheInfo = {
+                status: 'ready',
+                modelName: record.modelName || modelId,
+                sizeBytes: record.sizeBytes || record.onnxBytes.byteLength,
+                downloadProgress: 100,
+                lastUpdated: record.timestamp,
+                cacheVersion: PIPER_CACHE_VERSION,
+                isOfflineReady: true,
+              };
+              this.notify(info);
+              return resolve(info);
+            } else {
+              // Cache entry corrupt
+              this.currentStatus = 'error';
+              this.errorCategory = 'PARSE_FAILED';
+              this.errorMessage = bytesValidation.error || configValidation.error || 'Corrupt model cache in IndexedDB';
+              const info: PiperCacheInfo = {
+                status: 'error',
+                modelName: modelId,
+                sizeBytes: 0,
+                downloadProgress: 0,
+                errorMessage: this.errorMessage,
+                errorCategory: 'PARSE_FAILED',
+                cacheVersion: PIPER_CACHE_VERSION,
+                isOfflineReady: false,
+              };
+              this.notify(info);
+              return resolve(info);
+            }
           }
+
+          this.currentStatus = this.currentStatus === 'downloading' ? 'downloading' : 'not_cached';
+          const info: PiperCacheInfo = {
+            status: this.currentStatus,
+            modelName: modelId,
+            sizeBytes: 0,
+            downloadProgress: this.currentProgress,
+            errorMessage: this.errorMessage,
+            errorCategory: this.errorCategory,
+            cacheVersion: PIPER_CACHE_VERSION,
+            isOfflineReady: false,
+          };
+          this.notify(info);
+          resolve(info);
         };
 
         req.onerror = () => {
+          this.currentStatus = 'error';
+          this.errorCategory = 'STORAGE_FAILED';
+          this.errorMessage = 'Failed to read from IndexedDB';
           const info: PiperCacheInfo = {
             status: 'error',
             modelName: modelId,
             sizeBytes: 0,
             downloadProgress: 0,
-            errorMessage: 'Failed to read from IndexedDB',
+            errorMessage: this.errorMessage,
+            errorCategory: 'STORAGE_FAILED',
+            cacheVersion: PIPER_CACHE_VERSION,
             isOfflineReady: false,
           };
           this.notify(info);
@@ -132,6 +187,7 @@ class IndexedDbModelStore {
         sizeBytes: 0,
         downloadProgress: 0,
         errorMessage: e?.message,
+        cacheVersion: PIPER_CACHE_VERSION,
         isOfflineReady: false,
       };
       this.notify(info);
@@ -140,11 +196,13 @@ class IndexedDbModelStore {
   }
 
   /**
-   * Retrieve cached ONNX model and config from IndexedDB
+   * Retrieve cached ONNX model and config from IndexedDB.
+   * Strictly validates that both ONNX model and JSON config exist and are valid.
+   * Never silently substitutes {} on config error.
    */
   public async getModel(modelId: string = DEFAULT_PIPER_MODEL_NAME): Promise<{
     onnxBytes: ArrayBuffer;
-    config: any;
+    config: PiperModelConfig;
   } | null> {
     try {
       const db = await this.getDB();
@@ -155,20 +213,34 @@ class IndexedDbModelStore {
 
         req.onsuccess = () => {
           const record = req.result as StoredModelRecord | undefined;
-          if (record && record.onnxBytes) {
-            let configObj = null;
-            try {
-              configObj = JSON.parse(record.configJson);
-            } catch {
-              configObj = {};
-            }
-            resolve({
-              onnxBytes: record.onnxBytes,
-              config: configObj,
-            });
-          } else {
-            resolve(null);
+          if (!record || !record.onnxBytes) {
+            return resolve(null);
           }
+
+          // Check cache version
+          if (record.cacheVersion !== PIPER_CACHE_VERSION) {
+            console.warn(`Piper cached model version mismatch (${record.cacheVersion} vs ${PIPER_CACHE_VERSION})`);
+            return resolve(null);
+          }
+
+          // 1. Validate model weights
+          const bytesValidation = validatePiperModelBytes(record.onnxBytes);
+          if (!bytesValidation.valid) {
+            console.error('Piper model bytes validation failed (parse failed):', bytesValidation.error);
+            return resolve(null);
+          }
+
+          // 2. Validate configuration (Strict: no silent fallback to {})
+          const configValidation = validatePiperModelConfig(record.configJson, modelId);
+          if (!configValidation.valid || !configValidation.config) {
+            console.error('Piper model config validation failed (parse failed):', configValidation.error);
+            return resolve(null);
+          }
+
+          resolve({
+            onnxBytes: record.onnxBytes,
+            config: configValidation.config,
+          });
         };
 
         req.onerror = () => reject(req.error);
@@ -180,7 +252,7 @@ class IndexedDbModelStore {
   }
 
   /**
-   * Save model to IndexedDB
+   * Save model and config to IndexedDB after strict validation
    */
   public async saveModel(
     modelId: string,
@@ -188,6 +260,18 @@ class IndexedDbModelStore {
     configJson: string
   ): Promise<boolean> {
     try {
+      // 1. Validate model bytes
+      const bytesValidation = validatePiperModelBytes(onnxBytes);
+      if (!bytesValidation.valid) {
+        throw new Error(`parse failed: ${bytesValidation.error}`);
+      }
+
+      // 2. Validate config
+      const configValidation = validatePiperModelConfig(configJson, modelId);
+      if (!configValidation.valid) {
+        throw new Error(`parse failed: ${configValidation.error}`);
+      }
+
       const db = await this.getDB();
       return new Promise((resolve, reject) => {
         const tx = db.transaction(STORE_NAME, 'readwrite');
@@ -195,6 +279,7 @@ class IndexedDbModelStore {
         const record: StoredModelRecord = {
           id: modelId,
           modelName: modelId,
+          cacheVersion: PIPER_CACHE_VERSION,
           onnxBytes,
           configJson,
           sizeBytes: onnxBytes.byteLength,
@@ -205,25 +290,29 @@ class IndexedDbModelStore {
         req.onsuccess = () => {
           this.currentStatus = 'ready';
           this.currentProgress = 100;
+          this.errorMessage = undefined;
+          this.errorCategory = undefined;
           this.notify({
             status: 'ready',
             modelName: modelId,
             sizeBytes: onnxBytes.byteLength,
             downloadProgress: 100,
+            cacheVersion: PIPER_CACHE_VERSION,
             isOfflineReady: true,
           });
           resolve(true);
         };
         req.onerror = () => reject(req.error);
       });
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to save Piper model to IndexedDB:', err);
       return false;
     }
   }
 
   /**
-   * Download model and persist in IndexedDB with real progress tracking
+   * Download model and persist in IndexedDB with real progress tracking.
+   * Requires valid configuration and weights without silent fallbacks.
    */
   public async downloadAndCacheModel(
     onProgress?: (pct: number) => void
@@ -242,16 +331,39 @@ class IndexedDbModelStore {
     onProgress?.(5);
 
     try {
-      // 1. Fetch Config JSON
-      const configUrl = `${MODEL_BASE_URL}/${JSON_FILENAME}`;
-      let configJsonStr = '{}';
+      // 1. Fetch Config JSON (local bundle first, then remote)
+      let configJsonStr = '';
       try {
-        const configRes = await fetch(configUrl);
-        if (configRes.ok) {
-          configJsonStr = await configRes.text();
+        const localConfigRes = await fetch(`/${JSON_FILENAME}`);
+        if (localConfigRes.ok) {
+          configJsonStr = await localConfigRes.text();
         }
-      } catch (err) {
-        console.warn('Could not fetch remote config, using default config fallback:', err);
+      } catch {}
+
+      if (!configJsonStr) {
+        const configUrl = `${MODEL_BASE_URL}/${JSON_FILENAME}`;
+        let configRes: Response;
+        try {
+          configRes = await fetch(configUrl);
+        } catch (netErr: any) {
+          const err: any = new Error(`download failed: network error fetching config from ${configUrl} (${netErr?.message})`);
+          err.category = 'DOWNLOAD_FAILED';
+          throw err;
+        }
+        if (!configRes.ok) {
+          const err: any = new Error(`download failed: HTTP ${configRes.status} fetching config from ${configUrl}`);
+          err.category = 'DOWNLOAD_FAILED';
+          throw err;
+        }
+        configJsonStr = await configRes.text();
+      }
+
+      // Validate config immediately
+      const configValidation = validatePiperModelConfig(configJsonStr, DEFAULT_PIPER_MODEL_NAME);
+      if (!configValidation.valid) {
+        const err: any = new Error(`parse failed: ${configValidation.error}`);
+        err.category = 'PARSE_FAILED';
+        throw err;
       }
 
       this.currentProgress = 15;
@@ -261,14 +373,24 @@ class IndexedDbModelStore {
         modelName: DEFAULT_PIPER_MODEL_NAME,
         sizeBytes: 0,
         downloadProgress: 15,
+        cacheVersion: PIPER_CACHE_VERSION,
         isOfflineReady: false,
       });
 
       // 2. Fetch ONNX Model weights with progress
       const modelUrl = `${MODEL_BASE_URL}/${ONNX_FILENAME}`;
-      const modelRes = await fetch(modelUrl);
+      let modelRes: Response;
+      try {
+        modelRes = await fetch(modelUrl);
+      } catch (netErr: any) {
+        const err: any = new Error(`download failed: network error fetching weights from ${modelUrl} (${netErr?.message})`);
+        err.category = 'DOWNLOAD_FAILED';
+        throw err;
+      }
       if (!modelRes.ok) {
-        throw new Error(`Failed to fetch model weights: HTTP ${modelRes.status}`);
+        const err: any = new Error(`download failed: HTTP ${modelRes.status} fetching weights from ${modelUrl}`);
+        err.category = 'DOWNLOAD_FAILED';
+        throw err;
       }
 
       const contentLength = Number(modelRes.headers.get('content-length')) || 25 * 1024 * 1024;
@@ -297,6 +419,7 @@ class IndexedDbModelStore {
               modelName: DEFAULT_PIPER_MODEL_NAME,
               sizeBytes: receivedBytes,
               downloadProgress: pct,
+              cacheVersion: PIPER_CACHE_VERSION,
               isOfflineReady: false,
             });
           }
@@ -311,18 +434,34 @@ class IndexedDbModelStore {
         onnxBytes = merged.buffer;
       }
 
+      // Validate weights before saving
+      const bytesValidation = validatePiperModelBytes(onnxBytes);
+      if (!bytesValidation.valid) {
+        const err: any = new Error(`parse failed: ${bytesValidation.error}`);
+        err.category = 'PARSE_FAILED';
+        throw err;
+      }
+
       // 3. Save to IndexedDB
       this.currentProgress = 95;
       onProgress?.(95);
-      await this.saveModel(DEFAULT_PIPER_MODEL_NAME, onnxBytes, configJsonStr);
+      const saved = await this.saveModel(DEFAULT_PIPER_MODEL_NAME, onnxBytes, configJsonStr);
+      if (!saved) {
+        const err: any = new Error('storage failed: could not persist model and configuration in IndexedDB');
+        err.category = 'STORAGE_FAILED';
+        throw err;
+      }
 
       this.currentStatus = 'ready';
       this.currentProgress = 100;
+      this.errorMessage = undefined;
+      this.errorCategory = undefined;
       onProgress?.(100);
       return true;
     } catch (err: any) {
       console.error('Piper model download error:', err);
       this.currentStatus = 'error';
+      this.errorCategory = err?.category || (err?.message?.includes('download') ? 'DOWNLOAD_FAILED' : 'PARSE_FAILED');
       this.errorMessage = err?.message || 'Download failed';
       this.notify({
         status: 'error',
@@ -330,6 +469,8 @@ class IndexedDbModelStore {
         sizeBytes: 0,
         downloadProgress: 0,
         errorMessage: this.errorMessage,
+        errorCategory: this.errorCategory,
+        cacheVersion: PIPER_CACHE_VERSION,
         isOfflineReady: false,
       });
       return false;

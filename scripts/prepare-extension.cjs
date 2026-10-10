@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const JSZip = require('jszip');
+const { bundleTts } = require('./bundle-tts.cjs');
 
 async function prepareExtension() {
   console.log('🚀 Preparing Chrome Extension files & zip bundle...');
@@ -14,6 +15,9 @@ async function prepareExtension() {
     console.error('❌ dist/ directory does not exist. Run vite build first.');
     process.exit(1);
   }
+
+  // 0. Build canonical TTS engine bundle
+  await bundleTts();
 
   // Create target directories
   fs.mkdirSync(path.join(extDir, 'assets'), { recursive: true });
@@ -58,7 +62,7 @@ async function prepareExtension() {
   fs.writeFileSync(path.join(extDir, 'index.html'), extensionHtml, 'utf8');
   fs.writeFileSync(path.join(distDir, 'index.html'), extensionHtml, 'utf8');
 
-  // 3. Copy manifest, background, content, icons, offscreen document & TTS engines
+  // 3. Copy manifest, background, content, icons, offscreen document & runtime assets
   const filesToCopy = [
     'manifest.json',
     'background.js',
@@ -66,8 +70,12 @@ async function prepareExtension() {
     'content.css',
     'offscreen.html',
     'offscreen.js',
-    'espeak-engine.js',
-    'piper-engine.js'
+    'ort.min.js',
+    'ort-wasm-simd-threaded.wasm',
+    'ort-wasm-simd-threaded.mjs',
+    'tts-engine.bundle.js',
+    'espeak-ng.wasm',
+    'fa_IR-amir-medium.onnx.json'
   ];
 
   for (const file of filesToCopy) {
@@ -77,6 +85,14 @@ async function prepareExtension() {
       fs.copyFileSync(src, path.join(distDir, file));
       console.log('✓ Synced ' + file);
     }
+  }
+
+  // Copy espeak-data folder
+  const espeakDataSrc = path.join(publicDir, 'espeak-data');
+  if (fs.existsSync(espeakDataSrc)) {
+    fs.cpSync(espeakDataSrc, path.join(extDir, 'espeak-data'), { recursive: true });
+    fs.cpSync(espeakDataSrc, path.join(distDir, 'espeak-data'), { recursive: true });
+    console.log('✓ Synced espeak-data directory');
   }
 
   // Copy icons
@@ -122,10 +138,25 @@ How to read highlighted text from any webpage:
   zip.file('content.css', fs.readFileSync(path.join(extDir, 'content.css'), 'utf8'));
   zip.file('offscreen.html', fs.readFileSync(path.join(extDir, 'offscreen.html'), 'utf8'));
   zip.file('offscreen.js', fs.readFileSync(path.join(extDir, 'offscreen.js'), 'utf8'));
-  zip.file('espeak-engine.js', fs.readFileSync(path.join(extDir, 'espeak-engine.js'), 'utf8'));
-  zip.file('piper-engine.js', fs.readFileSync(path.join(extDir, 'piper-engine.js'), 'utf8'));
+  zip.file('tts-engine.bundle.js', fs.readFileSync(path.join(extDir, 'tts-engine.bundle.js'), 'utf8'));
   zip.file('index.html', extensionHtml);
   zip.file('README.txt', readmeText);
+
+  if (fs.existsSync(path.join(extDir, 'ort.min.js'))) {
+    zip.file('ort.min.js', fs.readFileSync(path.join(extDir, 'ort.min.js'), 'utf8'));
+  }
+  if (fs.existsSync(path.join(extDir, 'ort-wasm-simd-threaded.wasm'))) {
+    zip.file('ort-wasm-simd-threaded.wasm', fs.readFileSync(path.join(extDir, 'ort-wasm-simd-threaded.wasm')));
+  }
+  if (fs.existsSync(path.join(extDir, 'ort-wasm-simd-threaded.mjs'))) {
+    zip.file('ort-wasm-simd-threaded.mjs', fs.readFileSync(path.join(extDir, 'ort-wasm-simd-threaded.mjs'), 'utf8'));
+  }
+  if (fs.existsSync(path.join(extDir, 'espeak-ng.wasm'))) {
+    zip.file('espeak-ng.wasm', fs.readFileSync(path.join(extDir, 'espeak-ng.wasm')));
+  }
+  if (fs.existsSync(path.join(extDir, 'fa_IR-amir-medium.onnx.json'))) {
+    zip.file('fa_IR-amir-medium.onnx.json', fs.readFileSync(path.join(extDir, 'fa_IR-amir-medium.onnx.json'), 'utf8'));
+  }
 
   const assetsFolder = zip.folder('assets');
   if (fs.existsSync(path.join(extDir, 'assets', 'app.js'))) {
@@ -160,3 +191,4 @@ prepareExtension().catch((err) => {
   console.error('Error preparing extension:', err);
   process.exit(1);
 });
+

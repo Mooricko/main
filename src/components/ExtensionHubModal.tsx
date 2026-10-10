@@ -71,7 +71,7 @@ export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
   const [downloadDone, setDownloadDone] = useState(false);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [selectedFileType, setSelectedFileType] = useState<
-    'manifest' | 'background' | 'offscreenHtml' | 'offscreenJs' | 'espeakJs' | 'piperJs' | 'contentJs' | 'contentCss'
+    'manifest' | 'background' | 'offscreenHtml' | 'offscreenJs' | 'ttsBundle' | 'contentJs' | 'contentCss'
   >('contentJs');
 
   // Offline Farsi TTS Testing State
@@ -601,25 +601,14 @@ export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setSelectedFileType('espeakJs')}
+                    onClick={() => setSelectedFileType('ttsBundle')}
                     className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                      selectedFileType === 'espeakJs'
+                      selectedFileType === 'ttsBundle'
                         ? 'bg-red-500 text-white'
                         : `border ${theme.borderClass} ${theme.textMuted} hover:${theme.textPrimary}`
                     }`}
                   >
-                    espeak-engine.js (WASM)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedFileType('piperJs')}
-                    className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                      selectedFileType === 'piperJs'
-                        ? 'bg-red-500 text-white'
-                        : `border ${theme.borderClass} ${theme.textMuted} hover:${theme.textPrimary}`
-                    }`}
-                  >
-                    piper-engine.js (ONNX)
+                    tts-engine.bundle.js (Unified)
                   </button>
                   <button
                     type="button"
@@ -918,8 +907,11 @@ function getCodeSnippet(type: 'manifest' | 'background' | 'offscreenHtml' | 'off
         "content.css",
         "offscreen.html",
         "offscreen.js",
-        "espeak-engine.js",
-        "piper-engine.js",
+        "ort.min.js",
+        "ort-wasm-simd-threaded.wasm",
+        "ort-wasm-simd-threaded.mjs",
+        "tts-engine.bundle.js",
+        "espeak-ng.wasm",
         "assets/*"
       ],
       "matches": ["<all_urls>"]
@@ -986,84 +978,79 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 </head>
 <body>
   <audio id="tts-audio-player"></audio>
-  <script src="espeak-engine.js"></script>
-  <script src="piper-engine.js"></script>
+  <script src="ort.min.js"></script>
+  <script src="tts-engine.bundle.js"></script>
   <script src="offscreen.js"></script>
 </body>
 </html>`;
     case 'offscreenJs':
-      return `// offscreen.js - Central Dispatcher & Audio Player
-const espeak = new window.EspeakEngine();
-const piper = new window.PiperEngine();
+      return `// offscreen.js - Chrome Extension Audio Dispatcher & Playback Bridge
+// Uses canonical TTS manager exported by tts-engine.bundle.js
 const audioEl = document.getElementById('tts-audio-player');
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.target !== 'OFFSCREEN_TTS') return false;
 
   if (message.action === 'SPEAK') {
-    // 1. Immediately cancel any currently playing sentence
-    espeak.stop();
-    piper.stop();
-    if (audioEl) { audioEl.pause(); audioEl.currentTime = 0; }
-
-    const engine = message.engine === 'piper' ? piper : espeak;
-    engine.synthesize(message.text, { speed: message.speed, pitch: message.pitch })
-      .then(async (res) => {
-        const url = URL.createObjectURL(res.wavBlob);
-        audioEl.src = url;
+    const manager = window.farsiOfflineTts;
+    manager.synthesize(message.text, {
+      engine: message.engine,
+      speed: message.speed,
+      pitch: message.pitch,
+      volume: message.volume,
+      allowFallback: message.allowFallback ?? true
+    })
+    .then(async (res) => {
+      if (res.success && res.wavBlob) {
+        audioEl.src = URL.createObjectURL(res.wavBlob);
         await audioEl.play();
-        sendResponse({ success: true, engineUsed: res.engineUsed, durationMs: res.durationMs });
-      })
-      .catch((err) => {
-        // Automatic fallback to eSpeak on failure
-        espeak.speak(message.text);
-        sendResponse({ success: true, engineUsed: 'espeak', fallback: true });
+      }
+      sendResponse({
+        success: res.success,
+        engineUsed: res.engineUsed,
+        durationMs: res.durationMs,
+        fallbackTriggered: res.fallbackTriggered,
+        fallbackReason: res.fallbackReason
       });
+    })
+    .catch((err) => {
+      sendResponse({ success: false, error: err.message });
+    });
     return true;
   }
 
   if (message.action === 'STOP') {
-    espeak.stop();
-    piper.stop();
-    if (audioEl) { audioEl.pause(); }
+    window.farsiOfflineTts?.stop();
+    if (audioEl) { audioEl.pause(); audioEl.currentTime = 0; }
     sendResponse({ success: true });
   }
 });`;
-    case 'espeakJs':
-      return `// espeak-engine.js - Lightweight eSpeak NG (WASM) Synthesizer (< 5MB)
-class EspeakEngine {
-  constructor() {
-    this.sampleRate = 22050;
-    this.audioCtx = null;
-  }
-  async init() { return true; } // Instant-load
-  async synthesize(text, options = {}) {
-    // Acoustic 3-formant simulation for Farsi vowels & consonants
-    // Generates standard 16-bit PCM RIFF WAV Blob
-    return { wavBlob, durationMs, sampleRate: 22050, engineUsed: 'espeak' };
-  }
-  stop() { /* Cancels active Web Audio nodes */ }
-}
-window.EspeakEngine = EspeakEngine;`;
-    case 'piperJs':
-      return `// piper-engine.js - Piper Neural Voice Synthesizer (ONNX Web Runtime)
-class PiperEngine {
-  async init() {
-    // Loads fa_IR-amir-medium.onnx model from local IndexedDB cache (100% offline)
-    const model = await getFromIndexedDB('fa_IR-amir-medium');
-    this.session = await ort.InferenceSession.create(model.onnxBytes, {
-      executionProviders: ['wasm', 'webgpu']
-    });
-  }
-  async synthesize(text, options = {}) {
-    if (!this.session) {
-      // Automatic graceful fallback to eSpeak NG WASM
-      return window.EspeakEngine.synthesize(text, options);
-    }
-    // Tokenize Farsi -> ONNX Run -> Raw PCM -> WAV Blob
-  }
-}
-window.PiperEngine = PiperEngine;`;
+    case 'ttsBundle':
+      return `// tts-engine.bundle.js - Unified Dual-Engine Offline Farsi TTS Architecture
+// Compiled from src/services/tts/offscreenBridge.ts
+//
+// 1. Persian Normalization:
+//    - Arabic -> Persian grapheme unification (ي/ى -> ی, ك -> ک)
+//    - ZWNJ boundary preservation (\u200C for verbal prefixes & plural suffixes)
+//    - Persian digits (۰-۹) and punctuation handling
+//
+// 2. Real eSpeak NG WASM (voice: "fa"):
+//    - G2P: Converts text to authoritative IPA phonemes (salˈɑm dˈonjɑ)
+//    - Synthesis: Direct 22,050Hz 16-bit mono PCM RIFF WAV audio generation
+//
+// 3. Piper Neural Engine (ONNX Runtime Web):
+//    - Maps IPA phonemes to model token IDs via fa_IR-amir-medium.onnx.json
+//    - Executes ONNX session (input, input_lengths, scales)
+//    - Direct PCM WAV encoding via shared audioUtils.ts
+//    - Honest reporting (engineUsed: 'piper')
+//
+// 4. Unified Manager (farsiOfflineTTS.ts):
+//    - Orchestrates Piper with explicit manager-level fallback to real eSpeak NG
+//
+// Global APIs exposed in extension offscreen context:
+window.farsiOfflineTts; // Canonical Manager
+window.piperEngine;     // Piper Neural Engine
+window.espeakEngine;    // Real eSpeak NG Engine`;
     case 'contentJs':
       return `// content.js - Injected selection reader script
 (function () {

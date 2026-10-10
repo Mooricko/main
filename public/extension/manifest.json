@@ -24,8 +24,13 @@
         "content.css",
         "offscreen.html",
         "offscreen.js",
-        "espeak-engine.js",
-        "piper-engine.js",
+        "ort.min.js",
+        "ort-wasm-simd-threaded.wasm",
+        "ort-wasm-simd-threaded.mjs",
+        "tts-engine.bundle.js",
+        "espeak-ng.wasm",
+        "espeak-data/*",
+        "fa_IR-amir-medium.onnx.json",
         "assets/*"
       ],
       "matches": ["<all_urls>"]

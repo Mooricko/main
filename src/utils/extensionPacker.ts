@@ -35,16 +35,16 @@ export async function downloadExtensionPackage(): Promise<void> {
     // fallback
   }
 
-  // 2. Fetch extension background, content scripts, offscreen document & offline TTS engines
+  // 2. Fetch extension background, content scripts, offscreen document & offline TTS engine bundle
   try {
-    const [contentJs, contentCss, bgJs, offscreenHtml, offscreenJs, espeakJs, piperJs] = await Promise.all([
+    const [contentJs, contentCss, bgJs, offscreenHtml, offscreenJs, ortJs, ttsBundleJs] = await Promise.all([
       fetch('./content.js').then((r) => r.ok ? r.text() : ''),
       fetch('./content.css').then((r) => r.ok ? r.text() : ''),
       fetch('./background.js').then((r) => r.ok ? r.text() : ''),
       fetch('./offscreen.html').then((r) => r.ok ? r.text() : ''),
       fetch('./offscreen.js').then((r) => r.ok ? r.text() : ''),
-      fetch('./espeak-engine.js').then((r) => r.ok ? r.text() : ''),
-      fetch('./piper-engine.js').then((r) => r.ok ? r.text() : '')
+      fetch('./ort.min.js').then((r) => r.ok ? r.text() : ''),
+      fetch('./tts-engine.bundle.js').then((r) => r.ok ? r.text() : ''),
     ]);
 
     if (contentJs) zip.file('content.js', contentJs);
@@ -52,8 +52,8 @@ export async function downloadExtensionPackage(): Promise<void> {
     if (bgJs) zip.file('background.js', bgJs);
     if (offscreenHtml) zip.file('offscreen.html', offscreenHtml);
     if (offscreenJs) zip.file('offscreen.js', offscreenJs);
-    if (espeakJs) zip.file('espeak-engine.js', espeakJs);
-    if (piperJs) zip.file('piper-engine.js', piperJs);
+    if (ortJs) zip.file('ort.min.js', ortJs);
+    if (ttsBundleJs) zip.file('tts-engine.bundle.js', ttsBundleJs);
   } catch (err) {
     console.warn('Failed to fetch extension scripts:', err);
   }

@@ -1,64 +1,188 @@
 /**
- * Engine 1: eSpeak NG (WASM) Voice Synthesizer
+ * Engine 1: Real eSpeak NG WebAssembly Voice Synthesizer & G2P Phonemizer
  * 
- * Lightweight, instant-load, robotic synthesized audio (< 5MB footprint).
- * 100% offline, zero network dependencies, runs in both extension offscreen
- * documents and standard browser Web Audio / WASM pipelines.
+ * Production-grade offline eSpeak NG engine:
+ * - 100% offline, zero external cloud dependencies
+ * - Full Persian / Farsi language support (voice: "fa")
+ * - Independent G2P phonemization (phonemize -> IPA string)
+ * - True eSpeak NG WASM audio synthesis (synthesize -> 22050Hz 16-bit mono WAV)
+ * - Deterministic, browser and extension offscreen document compatible
  */
 
-import { FarsiTtsOptions, SynthesisResult, TtsEngineInterface } from './types';
-import { normalizeFarsiText, FARSI_PHONEME_TABLE, encodePcmWav, PhonemeFormants } from './farsiPhonemizer';
+import { FarsiTtsOptions, SynthesisResult, TtsEngine, FarsiEspeak } from './types';
+import { normalizePersianText } from './phonemizer/persianNormalizer';
+import { farsiPhonemizer } from './phonemizer/espeakPhonemizer';
+import { encodePcmWav, playAudioBlob, AudioPlaybackHandle } from './audioUtils';
 
-export class EspeakEngine implements TtsEngineInterface {
+/**
+ * Legacy formant interface preserved solely for backwards compatibility
+ * @deprecated Real eSpeak NG WASM synthesis does not use manual formant tables
+ */
+export interface PhonemeFormants {
+  f1: number;
+  f2: number;
+  f3: number;
+  durationScale: number;
+  isVoiced: boolean;
+  isFricative?: boolean;
+  isPlosive?: boolean;
+}
+
+/**
+ * @deprecated Legacy manual formant table. Real eSpeak NG uses compiled voice data (fa_dict / phondata).
+ */
+export const FARSI_PHONEME_TABLE: Record<string, PhonemeFormants> = {
+  'DEFAULT': { f1: 500, f2: 1500, f3: 2500, durationScale: 1.0, isVoiced: true },
+};
+
+export class EspeakEngine implements TtsEngine, FarsiEspeak {
   public readonly name = 'eSpeak NG (WASM)';
   public readonly engineType = 'espeak' as const;
+  public readonly voice = 'fa';
 
-  private audioCtx: AudioContext | null = null;
-  private currentSource: AudioBufferSourceNode | null = null;
-  private currentGain: GainNode | null = null;
-  private isCurrentlySpeaking: boolean = false;
-  private sampleRate: number = 22050;
+  private readonly sampleRate = 22050;
+  private isCurrentlySpeaking = false;
+  private isInitialized = false;
+  private initPromise: Promise<void> | null = null;
+  private cachedWasmBinary: ArrayBuffer | null = null;
+  private currentPlaybackHandle: AudioPlaybackHandle | null = null;
 
   constructor() {
     // Lazily initialized
   }
 
-  private getAudioContext(): AudioContext | null {
-    if (this.audioCtx && this.audioCtx.state !== 'closed') {
-      if (this.audioCtx.state === 'suspended') {
-        this.audioCtx.resume().catch(() => {});
-      }
-      return this.audioCtx;
-    }
+  /**
+   * Initializes the eSpeak NG WebAssembly environment and prefetches wasm assets
+   */
+  public async initialize(): Promise<void> {
+    if (this.isInitialized) return;
+    if (this.initPromise) return this.initPromise;
 
-    if (typeof window !== 'undefined') {
-      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-      if (AudioContextClass) {
-        this.audioCtx = new AudioContextClass();
-        return this.audioCtx;
+    this.initPromise = (async () => {
+      try {
+        const isNode = typeof process !== 'undefined' && !!process.versions?.node;
+        const isExtension = typeof chrome !== 'undefined' && !!chrome.runtime?.getURL;
+
+        if (isNode) {
+          // Node.js environment: load wasm binary directly from node_modules if present
+          try {
+            const fs = await import('node:fs');
+            const { createRequire } = await import('node:module');
+            const req = createRequire(import.meta.url);
+            const wasmPath = req.resolve('espeak-ng/dist/espeak-ng.wasm');
+            if (fs.existsSync(wasmPath)) {
+              const buf = fs.readFileSync(wasmPath);
+              this.cachedWasmBinary = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+            }
+          } catch {
+            // Emscripten Node will handle file reading
+          }
+        } else if (typeof fetch === 'function') {
+          // Browser or Chrome Extension: prefetch and cache wasm binary in memory
+          try {
+            const wasmUrl = isExtension
+              ? chrome.runtime.getURL('espeak-ng.wasm')
+              : '/espeak-ng.wasm';
+            const resp = await fetch(wasmUrl);
+            if (resp.ok) {
+              this.cachedWasmBinary = await resp.arrayBuffer();
+            }
+          } catch (fetchErr) {
+            console.debug('Prefetching espeak-ng.wasm failed, falling back to dynamic locateFile:', fetchErr);
+          }
+        }
+
+        // Initialize phonemizer as well so G2P is warm
+        await farsiPhonemizer.init();
+
+        this.isInitialized = true;
+        console.log('✓ Real eSpeak NG WASM Engine initialized successfully (voice: fa)');
+      } catch (err) {
+        console.error('Failed to initialize eSpeak NG WASM engine:', err);
+        throw err;
+      } finally {
+        this.initPromise = null;
       }
-    }
-    return null;
+    })();
+
+    return this.initPromise;
   }
 
   public async init(): Promise<boolean> {
-    // eSpeak NG WASM is instant-ready (< 5MB footprint)
-    this.getAudioContext();
-    return true;
+    try {
+      await this.initialize();
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**
-   * Synthesize Farsi text into raw PCM samples and a WAV Blob
+   * Run an eSpeak NG WASM CLI invocation inside the WebAssembly sandbox
+   */
+  private async runEspeakInstance(args: string[]): Promise<any> {
+    const isNode = typeof process !== 'undefined' && !!process.versions?.node;
+    const isExtension = typeof chrome !== 'undefined' && !!chrome.runtime?.getURL;
+
+    const moduleConfig: any = {
+      arguments: args,
+      noInitialRun: false,
+    };
+
+    if (this.cachedWasmBinary) {
+      moduleConfig.wasmBinary = this.cachedWasmBinary;
+    } else if (!isNode) {
+      const wasmUrl = isExtension
+        ? chrome.runtime.getURL('espeak-ng.wasm')
+        : '/espeak-ng.wasm';
+      moduleConfig.locateFile = (file: string) => {
+        if (file.endsWith('.wasm')) return wasmUrl;
+        return file;
+      };
+    }
+
+    const { default: ESpeakNG } = await import('espeak-ng');
+    return await ESpeakNG(moduleConfig);
+  }
+
+  /**
+   * Operation A: Real eSpeak NG G2P Phonemization for Persian
+   * Persian text -> eSpeak NG / fa -> IPA phoneme string
+   */
+  public async phonemize(text: string): Promise<string> {
+    const normalized = normalizePersianText(text);
+    if (!normalized) return '';
+
+    await this.initialize();
+
+    // Use fast in-memory phonemizer or fallback to direct ESpeakNG instance
+    try {
+      return await farsiPhonemizer.phonemize(normalized);
+    } catch {
+      const es = await this.runEspeakInstance([
+        '-v', this.voice,
+        '--ipa=3',
+        '-q',
+        '--phonout=ph.txt',
+        normalized
+      ]);
+      const phonemes = es.FS.readFile('ph.txt', { encoding: 'utf8' }) || '';
+      try { es.FS.unlink('ph.txt'); } catch {}
+      return phonemes.trim();
+    }
+  }
+
+  /**
+   * Operation B: Real eSpeak NG Audio Synthesis for Persian
+   * Persian text -> eSpeak NG / fa -> WAV audio blob
    */
   public async synthesize(text: string, options: FarsiTtsOptions = {}): Promise<SynthesisResult> {
-    const normalized = normalizeFarsiText(text);
-    const speed = Math.max(0.5, Math.min(2.0, options.speed ?? 1.0));
-    const pitch = Math.max(0.6, Math.min(1.4, options.pitch ?? 1.0));
+    const normalized = normalizePersianText(text);
 
     if (!normalized) {
-      const emptySamples = new Float32Array(0);
-      const emptyBlob = encodePcmWav(emptySamples, this.sampleRate);
+      const emptyBlob = encodePcmWav(new Float32Array(0), this.sampleRate);
       return {
+        success: true,
         wavBlob: emptyBlob,
         durationMs: 0,
         sampleRate: this.sampleRate,
@@ -67,188 +191,147 @@ export class EspeakEngine implements TtsEngineInterface {
       };
     }
 
-    // Split text into words and punctuation
-    const words = normalized.split(/\s+/).filter(Boolean);
-    const baseWordDuration = (0.24 / speed) * this.sampleRate; // samples per word
-    const sampleRate = this.sampleRate;
+    await this.initialize();
 
-    // Estimate total samples
-    let totalEstimatedSamples = Math.floor(words.length * baseWordDuration * 1.25 + sampleRate * 0.1);
-    const pcm = new Float32Array(totalEstimatedSamples);
-    let sampleOffset = 0;
+    const speed = Math.max(0.5, Math.min(2.0, options.speed ?? 1.0));
+    const pitch = Math.max(0.6, Math.min(1.4, options.pitch ?? 1.0));
+    const volume = Math.max(0.0, Math.min(1.0, options.volume ?? 1.0));
 
-    // Formant synthesizer parameters (eSpeak NG acoustic simulation)
-    const baseF0 = 130 * pitch; // Base fundamental frequency for robotic eSpeak timbre
+    // Calculate eSpeak CLI parameters
+    // Normal speed is ~175 WPM
+    const speedWpm = Math.round(175 * speed);
+    // Normal pitch is 50 (range 0 to 99)
+    const pitchVal = Math.round(50 * pitch);
+    // Normal amplitude is 100 (range 0 to 200)
+    const ampVal = Math.round(100 * volume);
 
-    for (let w = 0; w < words.length; w++) {
-      const word = words[w];
-      const wordDurationSec = Math.max(0.12, Math.min(0.6, (0.07 * word.length + 0.1) / speed));
-      const wordSamples = Math.floor(wordDurationSec * sampleRate);
+    const outFileName = `out_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.wav`;
 
-      // Analyze phonemes for the word
-      const phonemeList: PhonemeFormants[] = [];
-      for (let i = 0; i < word.length; i++) {
-        const ch = word[i];
-        phonemeList.push(FARSI_PHONEME_TABLE[ch] || FARSI_PHONEME_TABLE['DEFAULT']);
-      }
+    const args = [
+      '-v', this.voice,
+      '-s', speedWpm.toString(),
+      '-p', pitchVal.toString(),
+      '-a', ampVal.toString(),
+      '-w', outFileName,
+      normalized
+    ];
 
-      if (phonemeList.length === 0) {
-        phonemeList.push(FARSI_PHONEME_TABLE['DEFAULT']);
-      }
+    try {
+      const es = await this.runEspeakInstance(args);
+      const wavBytes = es.FS.readFile(outFileName);
+      try {
+        es.FS.unlink(outFileName);
+      } catch {}
 
-      const samplesPerPhoneme = Math.max(256, Math.floor(wordSamples / phonemeList.length));
+      const wavBlob = new Blob([wavBytes], { type: 'audio/wav' });
+      const samples = Math.max(0, (wavBytes.length - 44) / 2);
+      const durationMs = Math.round((samples / this.sampleRate) * 1000);
 
-      for (let p = 0; p < phonemeList.length; p++) {
-        const ph = phonemeList[p];
-        const phSamples = Math.floor(samplesPerPhoneme * ph.durationScale);
-
-        // Synthesis: Klatt-style 3-formant resonator with buzz + noise
-        const f1 = ph.f1;
-        const f2 = ph.f2;
-        const f3 = ph.f3;
-        const bw1 = 80;
-        const bw2 = 120;
-        const bw3 = 160;
-
-        // Pitch inflection (slight declaration toward end of word)
-        const progressInWord = p / phonemeList.length;
-        const currentF0 = baseF0 * (1.05 - 0.12 * progressInWord);
-        const pitchPeriod = sampleRate / currentF0;
-
-        let glottalPhase = 0;
-
-        for (let s = 0; s < phSamples; s++) {
-          if (sampleOffset >= pcm.length) break;
-
-          glottalPhase += 1 / pitchPeriod;
-          if (glottalPhase >= 1.0) glottalPhase -= 1.0;
-
-          // Glottal source (eSpeak pulse waveform)
-          let source = 0;
-          if (ph.isVoiced) {
-            source = glottalPhase < 0.35
-              ? Math.sin(Math.PI * (glottalPhase / 0.35))
-              : -0.15 * Math.sin(Math.PI * ((glottalPhase - 0.35) / 0.65));
-          }
-
-          // Fricative / aspiration noise component
-          if (ph.isFricative || !ph.isVoiced) {
-            const whiteNoise = (Math.random() * 2 - 1) * 0.45;
-            source = ph.isVoiced ? source * 0.6 + whiteNoise * 0.4 : whiteNoise;
-          }
-
-          // Plosive burst
-          if (ph.isPlosive && s < sampleRate * 0.015) {
-            source += (Math.random() * 2 - 1) * 0.7;
-          }
-
-          // 3-Formant resonance combination
-          const t = s / sampleRate;
-          const r1 = Math.sin(2 * Math.PI * f1 * t) * Math.exp(-t * bw1);
-          const r2 = Math.sin(2 * Math.PI * f2 * t) * Math.exp(-t * bw2);
-          const r3 = Math.sin(2 * Math.PI * f3 * t) * Math.exp(-t * bw3);
-
-          const sampleVal = source * (r1 * 0.5 + r2 * 0.35 + r3 * 0.15);
-
-          // Envelope windowing (smooth attack / release)
-          let env = 1.0;
-          const attack = Math.min(64, Math.floor(phSamples * 0.15));
-          const decay = Math.min(96, Math.floor(phSamples * 0.2));
-          if (s < attack) env = s / attack;
-          else if (s > phSamples - decay) env = (phSamples - s) / decay;
-
-          pcm[sampleOffset++] = Math.max(-1.0, Math.min(1.0, sampleVal * env * 0.75));
-        }
-      }
-
-      // Inter-word micro pause (e.g. 35ms)
-      const pauseSamples = Math.floor(0.035 * sampleRate);
-      for (let k = 0; k < pauseSamples && sampleOffset < pcm.length; k++) {
-        pcm[sampleOffset++] = 0;
-      }
+      return {
+        success: true,
+        wavBlob,
+        durationMs,
+        sampleRate: this.sampleRate,
+        engineUsed: 'espeak',
+        fallbackTriggered: false,
+      };
+    } catch (err: any) {
+      console.error('eSpeak NG WASM synthesis error:', err);
+      return {
+        success: false,
+        wavBlob: encodePcmWav(new Float32Array(0), this.sampleRate),
+        durationMs: 0,
+        sampleRate: this.sampleRate,
+        engineUsed: 'espeak',
+        fallbackTriggered: false,
+        error: err?.message || 'eSpeak NG WASM synthesis failed',
+      };
     }
-
-    // Trim PCM to actual written length
-    const actualPcm = pcm.subarray(0, sampleOffset);
-    const wavBlob = encodePcmWav(actualPcm, sampleRate);
-    const durationMs = Math.round((actualPcm.length / sampleRate) * 1000);
-
-    return {
-      wavBlob,
-      durationMs,
-      sampleRate,
-      engineUsed: 'espeak',
-      fallbackTriggered: false,
-    };
   }
 
   /**
-   * Speak text with clean interruption
+   * Plays synthesized speech through browser audio output
    */
   public async speak(text: string, options: FarsiTtsOptions = {}): Promise<void> {
-    // 1. Immediately interrupt any active playback
     this.stop();
-
-    const ctx = this.getAudioContext();
-    if (!ctx) {
-      options.onError?.(new Error('AudioContext not available'));
-      return;
-    }
+    this.isCurrentlySpeaking = true;
 
     try {
-      options.onStart?.();
-      this.isCurrentlySpeaking = true;
-
-      const { wavBlob } = await this.synthesize(text, options);
-      const arrayBuffer = await wavBlob.arrayBuffer();
-      const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
-
-      const source = ctx.createBufferSource();
-      source.buffer = audioBuffer;
-
-      const gain = ctx.createGain();
-      gain.gain.value = Math.max(0, Math.min(1, options.volume ?? 1.0));
-
-      source.connect(gain);
-      gain.connect(ctx.destination);
-
-      this.currentSource = source;
-      this.currentGain = gain;
-
-      source.onended = () => {
+      const res = await this.synthesize(text, options);
+      if (!res.success) {
         this.isCurrentlySpeaking = false;
-        this.currentSource = null;
-        options.onEnd?.();
-      };
+        options.onError?.(new Error(res.error || 'eSpeak synthesis failed'));
+        return;
+      }
 
-      source.start(0);
+      this.currentPlaybackHandle = await playAudioBlob(res.wavBlob, {
+        volume: options.volume ?? 1.0,
+        onStart: () => {
+          options.onStart?.();
+        },
+        onEnd: () => {
+          this.isCurrentlySpeaking = false;
+          this.currentPlaybackHandle = null;
+          options.onEnd?.();
+        },
+        onError: (err) => {
+          this.isCurrentlySpeaking = false;
+          this.currentPlaybackHandle = null;
+          options.onError?.(err);
+        },
+      });
     } catch (err: any) {
       this.isCurrentlySpeaking = false;
-      this.currentSource = null;
+      this.currentPlaybackHandle = null;
       options.onError?.(err);
-      throw err;
     }
   }
 
+  /**
+   * Helper to play an already-synthesized WAV blob
+   */
+  public async playWavBlob(blob: Blob, options: FarsiTtsOptions = {}): Promise<void> {
+    this.stop();
+    this.isCurrentlySpeaking = true;
+
+    this.currentPlaybackHandle = await playAudioBlob(blob, {
+      volume: options.volume ?? 1.0,
+      onStart: () => {
+        options.onStart?.();
+      },
+      onEnd: () => {
+        this.isCurrentlySpeaking = false;
+        this.currentPlaybackHandle = null;
+        options.onEnd?.();
+      },
+      onError: (err) => {
+        this.isCurrentlySpeaking = false;
+        this.currentPlaybackHandle = null;
+        options.onError?.(err);
+      },
+    });
+  }
+
+  /**
+   * Stops any currently playing audio
+   */
   public stop(): void {
-    if (this.currentSource) {
+    if (this.currentPlaybackHandle) {
       try {
-        this.currentSource.stop(0);
-        this.currentSource.disconnect();
-      } catch {
-        // Source might already have ended
-      }
-      this.currentSource = null;
-    }
-    if (this.currentGain) {
-      try {
-        this.currentGain.disconnect();
-      } catch {
-        // ignore
-      }
-      this.currentGain = null;
+        this.currentPlaybackHandle.stop();
+      } catch {}
+      this.currentPlaybackHandle = null;
     }
     this.isCurrentlySpeaking = false;
+  }
+
+  /**
+   * Disposes engine and releases audio resources
+   */
+  public dispose(): void {
+    this.stop();
+    this.cachedWasmBinary = null;
+    this.isInitialized = false;
   }
 
   public isSpeaking(): boolean {

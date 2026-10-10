@@ -25,13 +25,41 @@ export default defineConfig(() => {
         configureServer(server) {
           server.middlewares.use((req, res, next) => {
             if (req.url && req.url.split('?')[0].endsWith('.wasm')) {
-              const wasmFileName = path.basename(req.url.split('?')[0]);
+              const cleanPath = req.url.split('?')[0].replace(/^\//, '');
+              const wasmFileName = path.basename(cleanPath);
+
+              // 1. Check direct relative path under public/
+              const publicPath = path.resolve(__dirname, 'public', cleanPath);
+              if (fs.existsSync(publicPath) && fs.statSync(publicPath).isFile()) {
+                res.setHeader('Content-Type', 'application/wasm');
+                res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+                return fs.createReadStream(publicPath).pipe(res);
+              }
+
+              // 2. Check onnxruntime-web dist
               const ortWasmPath = path.resolve(__dirname, 'node_modules/onnxruntime-web/dist', wasmFileName);
               if (fs.existsSync(ortWasmPath)) {
                 res.setHeader('Content-Type', 'application/wasm');
                 res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
                 return fs.createReadStream(ortWasmPath).pipe(res);
               }
+
+              // 3. Check espeak-phonemizer wasm
+              const espeakWasmPath = path.resolve(__dirname, 'node_modules/espeak-phonemizer/dist/wasm', wasmFileName);
+              if (fs.existsSync(espeakWasmPath)) {
+                res.setHeader('Content-Type', 'application/wasm');
+                res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+                return fs.createReadStream(espeakWasmPath).pipe(res);
+              }
+
+              // 4. Check espeak-ng dist wasm
+              const espeakNgWasmPath = path.resolve(__dirname, 'node_modules/espeak-ng/dist', wasmFileName);
+              if (fs.existsSync(espeakNgWasmPath)) {
+                res.setHeader('Content-Type', 'application/wasm');
+                res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+                return fs.createReadStream(espeakNgWasmPath).pipe(res);
+              }
+
               // Prevent returning index.html for missing wasm files
               res.statusCode = 404;
               res.setHeader('Content-Type', 'text/plain');
@@ -64,7 +92,7 @@ export default defineConfig(() => {
         'gsap',
         'pdfjs-dist',
       ],
-      exclude: ['onnxruntime-web'],
+      exclude: ['onnxruntime-web', 'espeak-ng'],
       force: true,
     },
     build: {

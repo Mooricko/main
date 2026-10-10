@@ -12,6 +12,8 @@
         "@vitejs/plugin-react": "^5.0.4",
         "canvas-confetti": "^1.9.4",
         "dotenv": "^17.2.3",
+        "espeak-ng": "^1.0.2",
+        "espeak-phonemizer": "^0.2.0",
         "express": "^4.21.2",
         "gsap": "^3.15.0",
         "jszip": "^3.10.2",
@@ -453,6 +455,10 @@
     "escalade": ["escalade@3.2.0", "", {}, "sha512-WUj2qlxaQtO4g6Pq5c29GTcWGDyd8itL8zTlipgECz3JesAiiOKotd8JU6otB3PACgG6xkJUyVhboMS+bje/jA=="],
 
     "escape-html": ["escape-html@1.0.3", "", {}, "sha512-NiSupZ4OeuGwr68lGIeym/ksIZMJodUGOSCZ/FSnTxcrekbvqrgdUxlJOMpijaKZVjAJrWrGs/6Jy8OMuyj9ow=="],
+
+    "espeak-ng": ["espeak-ng@1.0.2", "", {}, "sha512-Xe4YC7d/+O06zYpsqrJ3LpbETdL/IO8JrnAmWcQEMoRFmMLWU+2y2HnpEkOCnqZfb40MBDVyP4ppfusKdWbPcQ=="],
+
+    "espeak-phonemizer": ["espeak-phonemizer@0.2.0", "", {}, "sha512-799DEY0UCwjF+Jyax+hWCeJDxdlkREnL51Xm02KPsIDA7ckoxYFYA9lypOng2AIQYrRq3himyi0vdqOKEGzqnQ=="],
 
     "etag": ["etag@1.8.1", "", {}, "sha512-aIL5Fx7mawVa300al2BnEE4iNvo1qETxLrPI/o05L7z6go7fCw1J6EQmbK4FmJ2AS7kgVF/KEZWufBfdClMcPg=="],
 

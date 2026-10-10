@@ -129,15 +129,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
-  // 3. Farsi Offline TTS Actions: SPEAK, STOP, SET_ENGINE, GET_TTS_STATUS, PRECACHE_PIPER
-  if (['SPEAK', 'STOP', 'SET_ENGINE', 'GET_TTS_STATUS', 'PRECACHE_PIPER'].includes(message.action)) {
+  const action = message.action || message.type;
+
+  // Broadcast STATUS_CHANGED events from offscreen to all open tabs & popup views
+  if (action === 'STATUS_CHANGED') {
+    try {
+      chrome.tabs.query({}, (tabs) => {
+        for (const tab of tabs) {
+          if (tab.id) {
+            try {
+              chrome.tabs.sendMessage(tab.id, message, () => {
+                if (chrome.runtime.lastError) {}
+              });
+            } catch {}
+          }
+        }
+      });
+    } catch {}
+    return false;
+  }
+
+  // 3. Farsi Offline TTS Actions: SPEAK, STOP, SET_ENGINE, GET_STATUS (canonical), GET_TTS_STATUS, PRECACHE_PIPER
+  if (['SPEAK', 'STOP', 'SET_ENGINE', 'GET_STATUS', 'GET_TTS_STATUS', 'PRECACHE_PIPER'].includes(action)) {
     (async () => {
       try {
         await ensureOffscreenDocument();
 
+        // Standardize canonical action to GET_STATUS if legacy GET_TTS_STATUS was received
+        const standardizedAction = action === 'GET_TTS_STATUS' ? 'GET_STATUS' : action;
+
         // Forward to Offscreen Document with explicit target
         const offscreenPayload = {
           ...message,
+          action: standardizedAction,
+          type: standardizedAction,
           target: 'OFFSCREEN_TTS'
         };
 
