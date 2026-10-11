@@ -9,6 +9,7 @@ import {
 } from '../types';
 import { generateReadingHeatmap } from '../utils/readingHeatmap';
 import { safeStorage } from '../utils/safeStorage';
+import { formatHistoryDate } from '../components/DocumentSidebar';
 
 const STORAGE_KEY_SESSIONS = 'adhd_reading_sessions_history_v1';
 const STORAGE_KEY_CURRENT_SPEED_TREND = 'adhd_current_session_speed_trend_v1';
@@ -154,10 +155,7 @@ export function useReadingHeatmap({
       const newRecord: ReadingSessionRecord = {
         id: session.id,
         timestamp: session.startTime,
-        dateLabel: new Date(session.startTime).toLocaleDateString(undefined, { 
-          month: 'short', 
-          day: 'numeric' 
-        }),
+        dateLabel: formatHistoryDate(session.startTime),
         documentTitle: session.documentTitle,
         wordsRead: session.wordsSet.size,
         dwellMs: Math.round(session.dwellMs),

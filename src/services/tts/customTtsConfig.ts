@@ -16,7 +16,15 @@
 import { CustomTtsConfig } from './types';
 import { safeStorage } from '../../utils/safeStorage';
 
-export const CUSTOM_TTS_STORAGE_KEY = 'adhd_reader_farsi_custom_tts_config';
+export const FARSI_CUSTOM_TTS_STORAGE_KEY = 'adhd_reader_farsi_custom_tts_config';
+export const ENGLISH_CUSTOM_TTS_STORAGE_KEY = 'adhd_reader_english_custom_tts_config';
+export const CUSTOM_TTS_STORAGE_KEY = FARSI_CUSTOM_TTS_STORAGE_KEY;
+
+export type CustomTtsLanguage = 'english' | 'farsi';
+
+export function getStorageKeyForLanguage(lang: CustomTtsLanguage = 'farsi'): string {
+  return lang === 'english' ? ENGLISH_CUSTOM_TTS_STORAGE_KEY : FARSI_CUSTOM_TTS_STORAGE_KEY;
+}
 
 export const DEFAULT_CUSTOM_TTS_CONFIG: CustomTtsConfig = {
   baseUrl: 'https://api.openai.com/v1',
@@ -81,15 +89,22 @@ export function validateCustomTtsConfig(
   return { valid: true, config: { baseUrl, apiKey, model, voice, format } };
 }
 
-export async function loadCustomTtsConfig(): Promise<Partial<CustomTtsConfig> | null> {
+export async function loadCustomTtsConfig(lang: CustomTtsLanguage = 'farsi'): Promise<Partial<CustomTtsConfig> | null> {
+  const key = getStorageKeyForLanguage(lang);
   try {
     if (hasChromeStorage()) {
-      const res = await chrome.storage.local.get([CUSTOM_TTS_STORAGE_KEY]);
-      const stored = res?.[CUSTOM_TTS_STORAGE_KEY];
+      const res = await chrome.storage.local.get([key, FARSI_CUSTOM_TTS_STORAGE_KEY]);
+      const stored = res?.[key] || (lang === 'english' ? null : res?.[FARSI_CUSTOM_TTS_STORAGE_KEY]);
       return stored && typeof stored === 'object' ? (stored as Partial<CustomTtsConfig>) : null;
     }
-    const raw = safeStorage.getItem(CUSTOM_TTS_STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as Partial<CustomTtsConfig>) : null;
+    const raw = safeStorage.getItem(key);
+    if (raw) return JSON.parse(raw) as Partial<CustomTtsConfig>;
+    // Backward compatibility fallback for english if only farsi key was previously stored
+    if (lang === 'english') {
+      const fallbackRaw = safeStorage.getItem(FARSI_CUSTOM_TTS_STORAGE_KEY);
+      return fallbackRaw ? (JSON.parse(fallbackRaw) as Partial<CustomTtsConfig>) : null;
+    }
+    return null;
   } catch {
     return null;
   }
@@ -97,24 +112,27 @@ export async function loadCustomTtsConfig(): Promise<Partial<CustomTtsConfig> | 
 
 /** Validates and persists. Returns the validation result so the UI can show the error. */
 export async function saveCustomTtsConfig(
-  input: Partial<CustomTtsConfig>
+  input: Partial<CustomTtsConfig>,
+  lang: CustomTtsLanguage = 'farsi'
 ): Promise<{ valid: true; config: CustomTtsConfig } | { valid: false; error: string }> {
   const result = validateCustomTtsConfig(input);
   if (!result.valid) return result;
+  const key = getStorageKeyForLanguage(lang);
   if (hasChromeStorage()) {
-    await chrome.storage.local.set({ [CUSTOM_TTS_STORAGE_KEY]: result.config });
+    await chrome.storage.local.set({ [key]: result.config });
   } else {
-    safeStorage.setItem(CUSTOM_TTS_STORAGE_KEY, JSON.stringify(result.config));
+    safeStorage.setItem(key, JSON.stringify(result.config));
   }
   return result;
 }
 
-export async function clearCustomTtsConfig(): Promise<void> {
+export async function clearCustomTtsConfig(lang: CustomTtsLanguage = 'farsi'): Promise<void> {
+  const key = getStorageKeyForLanguage(lang);
   try {
     if (hasChromeStorage()) {
-      await chrome.storage.local.remove([CUSTOM_TTS_STORAGE_KEY]);
+      await chrome.storage.local.remove([key]);
     }
-    safeStorage.removeItem(CUSTOM_TTS_STORAGE_KEY);
+    safeStorage.removeItem(key);
   } catch {
     // best effort
   }

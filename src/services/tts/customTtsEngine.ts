@@ -88,8 +88,14 @@ export class CustomTtsEngine implements TtsEngine {
   }
 
   public async synthesize(text: string, options: FarsiTtsOptions = {}): Promise<SynthesisResult> {
-    const stored = this.configOverride ?? (await loadCustomTtsConfig());
-    if (!stored) return this.fail('Custom TTS is not configured', 'NOT_CONFIGURED');
+    const isFarsi = isRtlText(text);
+    const targetLang = isFarsi ? 'farsi' : 'english';
+    let stored = this.configOverride ?? (await loadCustomTtsConfig(targetLang));
+    if (!stored && !this.configOverride) {
+      // Fallback to the other language config if only one was configured
+      stored = await loadCustomTtsConfig(targetLang === 'farsi' ? 'english' : 'farsi');
+    }
+    if (!stored) return this.fail(`Custom TTS is not configured for ${isFarsi ? 'Farsi' : 'English'}`, 'NOT_CONFIGURED');
     const validation = validateCustomTtsConfig(stored);
     if (validation.valid === false) return this.fail(validation.error, 'INVALID_CONFIG');
     const cfg: CustomTtsConfig = validation.config;

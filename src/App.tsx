@@ -17,7 +17,7 @@ import {
   ResolvedDocumentPosition
 } from './types';
 import { SAMPLE_TEXTS } from './data/sampleTexts';
-import { parseTextIntoWords, countWordsFast } from './utils/textParser';
+import { parseTextIntoWords, countWordsFast, isRtlText } from './utils/textParser';
 import { logDevDiagnostic } from './utils/performanceDiagnostics';
 import { 
   THEME_CONFIGS, 
@@ -1199,6 +1199,15 @@ export default function App() {
     warmupStatus,
   });
 
+  // Smart detection of input text language: Farsi vs English
+  const isCurrentTextFarsi = useMemo(() => {
+    if (activeMetadata?.direction === 'rtl') return true;
+    if (activeMetadata?.title && isRtlText(activeMetadata.title)) return true;
+    if (settings.fontFamily === 'vazirmatn') return true;
+    if (typeof settings.speechVoiceURI === 'string' && settings.speechVoiceURI.startsWith('farsi-')) return true;
+    return false;
+  }, [activeMetadata, settings.fontFamily, settings.speechVoiceURI]);
+
   return (
     <div 
       id="adhd-reader-app"
@@ -1376,6 +1385,7 @@ export default function App() {
         onOpenTimerModal={() => setIsTimerModalOpen(true)}
         warmupStatus={warmupStatus}
         onResetWarmup={handleResetWarmup}
+        isFarsiContent={isCurrentTextFarsi}
       />
 
       <KeyboardShortcutsModal

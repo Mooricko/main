@@ -238,6 +238,15 @@ class SpeechNarrationService {
 
     const universalCustomVoices: VoiceOption[] = [
       {
+        name: '🎙️ English Custom Endpoint (OpenAI / BYO API - English / LTR)',
+        lang: 'en-US',
+        voiceURI: 'english-custom',
+        default: false,
+        localService: false,
+        provider: 'Custom Endpoint (/v1/audio/speech - English)',
+        isCustom: true,
+      },
+      {
         name: '🎙️ Custom Endpoint (OpenAI / BYO API - All Languages)',
         lang: 'all',
         voiceURI: 'custom-endpoint',
@@ -433,8 +442,13 @@ class SpeechNarrationService {
       return;
     }
 
-    if (voiceURI === 'custom-endpoint' || voiceURI === 'farsi-custom') {
-      farsiOfflineTts.preview('custom', rate, pitch, volume, undefined, 'Custom TTS endpoint is active. Testing audio narration.');
+    if (voiceURI === 'custom-endpoint' || voiceURI === 'english-custom') {
+      farsiOfflineTts.preview('custom', rate, pitch, volume, undefined, 'English Custom TTS endpoint is active. Testing audio narration.');
+      return;
+    }
+
+    if (voiceURI === 'farsi-custom') {
+      farsiOfflineTts.preview('custom', rate, pitch, volume, undefined, 'تست صدای سفارشی فارسی برای خوانش ریتمیک.');
       return;
     }
 
@@ -671,8 +685,9 @@ class SpeechNarrationService {
     // 1. Check if user explicitly selected Custom Endpoint (supports ALL languages)
     const isCustomEndpoint =
       settings.speechVoiceURI === 'custom-endpoint' ||
+      settings.speechVoiceURI === 'english-custom' ||
       settings.speechVoiceURI === 'farsi-custom' ||
-      (settings.farsiTtsEngine === 'custom' && (!settings.speechVoiceURI || settings.speechVoiceURI === 'custom-endpoint' || settings.speechVoiceURI === 'farsi-custom'));
+      (settings.farsiTtsEngine === 'custom' && (!settings.speechVoiceURI || settings.speechVoiceURI === 'custom-endpoint' || settings.speechVoiceURI === 'english-custom' || settings.speechVoiceURI === 'farsi-custom'));
 
     if (isCustomEndpoint) {
       this.playFarsiOfflineTtsChunk({
@@ -1040,6 +1055,7 @@ class SpeechNarrationService {
     let engine: FarsiTtsEngineType = 'piper';
     const isCustomEndpoint =
       settings.speechVoiceURI === 'custom-endpoint' ||
+      settings.speechVoiceURI === 'english-custom' ||
       settings.speechVoiceURI === 'farsi-custom' ||
       settings.farsiTtsEngine === 'custom';
 

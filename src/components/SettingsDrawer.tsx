@@ -29,7 +29,8 @@ import {
   AlertTriangle,
   CheckCircle2,
   Trash2,
-  Activity
+  Activity,
+  Globe
 } from 'lucide-react';
 import { 
   ReaderSettings, 
@@ -62,6 +63,7 @@ interface SettingsDrawerProps {
   onOpenTimerModal?: () => void;
   warmupStatus?: WarmupStatus;
   onResetWarmup?: () => void;
+  isFarsiContent?: boolean;
 }
 
 export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
@@ -73,12 +75,29 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
   onOpenTimerModal,
   warmupStatus,
   onResetWarmup,
+  isFarsiContent = false,
 }) => {
   const [availableVoices, setAvailableVoices] = useState<VoiceOption[]>([]);
   const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
   const isSpeechSupported = speechNarrator.isSupported();
 
-  // Dual-Engine Offline Farsi TTS State
+  // Smart Language Detection: Auto-detect Farsi vs English based on input text
+  const [selectedTtsLang, setSelectedTtsLang] = useState<'english' | 'farsi'>(() => {
+    return isFarsiContent ? 'farsi' : 'english';
+  });
+
+  // Keep synced whenever input text language changes
+  useEffect(() => {
+    setSelectedTtsLang(isFarsiContent ? 'farsi' : 'english');
+  }, [isFarsiContent]);
+
+  // English Custom Endpoint State
+  const [englishCustomConfig, setEnglishCustomConfig] = useState<CustomTtsConfig>(DEFAULT_CUSTOM_TTS_CONFIG);
+  const [englishCustomKeyInput, setEnglishCustomKeyInput] = useState('');
+  const [isEnglishCustomTesting, setIsEnglishCustomTesting] = useState(false);
+  const [englishTtsNotice, setEnglishTtsNotice] = useState<string | null>(null);
+
+  // Dual-Engine Offline Farsi TTS & Farsi Custom Endpoint State
   const [piperCache, setPiperCache] = useState<PiperCacheInfo>({
     status: 'not_cached',
     modelName: 'fa_IR-amir-medium',
@@ -88,87 +107,162 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
   });
   const [isFarsiPreviewPlaying, setIsFarsiPreviewPlaying] = useState(false);
   const [farsiTtsNotice, setFarsiTtsNotice] = useState<string | null>(null);
-  const [customConfig, setCustomConfig] = useState<CustomTtsConfig>(DEFAULT_CUSTOM_TTS_CONFIG);
-  const [customKeyInput, setCustomKeyInput] = useState('');
+  const [farsiCustomConfig, setFarsiCustomConfig] = useState<CustomTtsConfig>(DEFAULT_CUSTOM_TTS_CONFIG);
+  const [farsiCustomKeyInput, setFarsiCustomKeyInput] = useState('');
+  const [isFarsiCustomTesting, setIsFarsiCustomTesting] = useState(false);
 
   useEffect(() => {
     const unsub = farsiOfflineTts.subscribePiperCache((info) => {
       setPiperCache(info);
     });
-    // Load any saved custom (BYO) endpoint config into the form.
-    loadCustomTtsConfig().then((cfg) => {
+
+    // Load English custom endpoint config
+    loadCustomTtsConfig('english').then((cfg) => {
       if (cfg) {
-        setCustomConfig({ ...DEFAULT_CUSTOM_TTS_CONFIG, ...cfg });
-        setCustomKeyInput(cfg.apiKey || '');
+        setEnglishCustomConfig({ ...DEFAULT_CUSTOM_TTS_CONFIG, ...cfg });
+        setEnglishCustomKeyInput(cfg.apiKey || '');
       }
     });
+
+    // Load Farsi custom endpoint config
+    loadCustomTtsConfig('farsi').then((cfg) => {
+      if (cfg) {
+        setFarsiCustomConfig({ ...DEFAULT_CUSTOM_TTS_CONFIG, ...cfg });
+        setFarsiCustomKeyInput(cfg.apiKey || '');
+      }
+    });
+
     return unsub;
   }, []);
 
   const currentFarsiEngine = settings.farsiTtsEngine || farsiOfflineTts.getActiveEngine();
-  const [isCustomTesting, setIsCustomTesting] = useState(false);
 
+  // English Custom Endpoint Handlers
+  const handleSaveEnglishCustomConfig = async () => {
+    const result = await saveCustomTtsConfig(
+      { ...englishCustomConfig, apiKey: englishCustomKeyInput.trim() },
+      'english'
+    );
+    if (result.valid === true) {
+      setEnglishCustomConfig(result.config);
+      setEnglishCustomKeyInput(result.config.apiKey);
+      onUpdateSettings({ speechVoiceURI: 'english-custom' });
+      setEnglishTtsNotice('✓ English Custom TTS endpoint saved and selected.');
+      setTimeout(() => setEnglishTtsNotice(null), 3500);
+    } else {
+      setEnglishTtsNotice(`⚠️ ${result.error}`);
+    }
+  };
+
+  const handleTestEnglishCustomEndpoint = async () => {
+    setIsEnglishCustomTesting(true);
+    setEnglishTtsNotice('⏳ Testing English custom endpoint connection...');
+    try {
+      const result = await saveCustomTtsConfig(
+        { ...englishCustomConfig, apiKey: englishCustomKeyInput.trim() },
+        'english'
+      );
+      if (result.valid === false) {
+        setEnglishTtsNotice(`⚠️ ${result.error}`);
+        setIsEnglishCustomTesting(false);
+        return;
+      }
+      setEnglishCustomConfig(result.config);
+      await farsiOfflineTts.preview(
+        'custom',
+        1.0,
+        settings.speechPitch || 1.0,
+        settings.speechVolume,
+        (fallbackReason) => {
+          setEnglishTtsNotice(`ℹ️ Fallback notice: ${fallbackReason}`);
+        },
+        'English Custom TTS endpoint connected successfully! Audio narration is ready for reading.'
+      );
+      setEnglishTtsNotice('✓ English Custom TTS endpoint test succeeded!');
+      setTimeout(() => setEnglishTtsNotice(null), 4000);
+    } catch (err: any) {
+      setEnglishTtsNotice(`⚠️ English Custom TTS error: ${err?.message || 'Connection failed'}`);
+    } finally {
+      setTimeout(() => setIsEnglishCustomTesting(false), 2600);
+    }
+  };
+
+  const handleClearEnglishCustomConfig = async () => {
+    await clearCustomTtsConfig('english');
+    setEnglishCustomConfig(DEFAULT_CUSTOM_TTS_CONFIG);
+    setEnglishCustomKeyInput('');
+    setEnglishTtsNotice('English Custom TTS endpoint cleared.');
+    setTimeout(() => setEnglishTtsNotice(null), 3000);
+  };
+
+  // Farsi Engine & Custom Endpoint Handlers
   const handleSelectFarsiEngine = (engine: FarsiTtsEngineType) => {
     farsiOfflineTts.setEngine(engine);
-    const voiceURI = engine === 'piper' ? 'farsi-piper-neural' : (engine === 'espeak' ? 'farsi-espeak-wasm' : 'custom-endpoint');
+    const voiceURI = engine === 'piper' ? 'farsi-piper-neural' : (engine === 'espeak' ? 'farsi-espeak-wasm' : 'farsi-custom');
     onUpdateSettings({ farsiTtsEngine: engine, speechVoiceURI: voiceURI });
     if (engine === 'piper' && !piperCache.isOfflineReady) {
       setFarsiTtsNotice('⚠️ Piper neural model not yet cached. It will automatically fallback to eSpeak NG WASM until downloaded.');
     } else if (engine === 'custom') {
-      setFarsiTtsNotice('🔐 Custom endpoint selected for all languages. Configure and test it below.');
+      setFarsiTtsNotice('🔐 Farsi custom endpoint selected. Configure and test your Persian model below.');
     } else {
       setFarsiTtsNotice(null);
     }
   };
 
-  const handleSaveCustomConfig = async () => {
-    const result = await saveCustomTtsConfig({ ...customConfig, apiKey: customKeyInput.trim() });
+  const handleSaveFarsiCustomConfig = async () => {
+    const result = await saveCustomTtsConfig(
+      { ...farsiCustomConfig, apiKey: farsiCustomKeyInput.trim() },
+      'farsi'
+    );
     if (result.valid === true) {
-      setCustomConfig(result.config);
-      setCustomKeyInput(result.config.apiKey);
-      onUpdateSettings({ farsiTtsEngine: 'custom', speechVoiceURI: 'custom-endpoint' });
-      setFarsiTtsNotice('✓ Custom TTS endpoint saved and selected for all languages.');
+      setFarsiCustomConfig(result.config);
+      setFarsiCustomKeyInput(result.config.apiKey);
+      onUpdateSettings({ farsiTtsEngine: 'custom', speechVoiceURI: 'farsi-custom' });
+      setFarsiTtsNotice('✓ تنظیمات موتور سفارشی فارسی ذخیره و انتخاب شد.');
       setTimeout(() => setFarsiTtsNotice(null), 3500);
     } else {
       setFarsiTtsNotice(`⚠️ ${result.error}`);
     }
   };
 
-  const handleTestCustomEndpoint = async () => {
-    setIsCustomTesting(true);
-    setFarsiTtsNotice('⏳ Testing custom endpoint connection...');
+  const handleTestFarsiCustomEndpoint = async () => {
+    setIsFarsiCustomTesting(true);
+    setFarsiTtsNotice('⏳ در حال آزمایش اتصال به سرور سفارشی فارسی...');
     try {
-      const result = await saveCustomTtsConfig({ ...customConfig, apiKey: customKeyInput.trim() });
+      const result = await saveCustomTtsConfig(
+        { ...farsiCustomConfig, apiKey: farsiCustomKeyInput.trim() },
+        'farsi'
+      );
       if (result.valid === false) {
         setFarsiTtsNotice(`⚠️ ${result.error}`);
-        setIsCustomTesting(false);
+        setIsFarsiCustomTesting(false);
         return;
       }
-      setCustomConfig(result.config);
+      setFarsiCustomConfig(result.config);
       await farsiOfflineTts.preview(
         'custom',
         settings.farsiTtsSpeed || 1.0,
-        settings.speechPitch || 1.0,
+        settings.farsiTtsPitch || 1.0,
         settings.speechVolume,
         (fallbackReason) => {
-          setFarsiTtsNotice(`ℹ️ Fallback notice: ${fallbackReason}`);
+          setFarsiTtsNotice(`ℹ️ پیام فال‌بک: ${fallbackReason}`);
         },
-        'Custom TTS endpoint connected successfully! Audio narration is active for all languages.'
+        'ارتباط با مدل اختصاصی گفتار فارسی با موفقیت برقرار شد. خوانش ریتمیک آماده است.'
       );
-      setFarsiTtsNotice('✓ Custom TTS endpoint test succeeded!');
+      setFarsiTtsNotice('✓ تست اتصال به موتور سفارشی فارسی موفقیت‌آمیز بود!');
       setTimeout(() => setFarsiTtsNotice(null), 4000);
     } catch (err: any) {
-      setFarsiTtsNotice(`⚠️ Custom TTS error: ${err?.message || 'Connection failed'}`);
+      setFarsiTtsNotice(`⚠️ خطای موتور سفارشی فارسی: ${err?.message || 'عدم برقراری ارتباط'}`);
     } finally {
-      setTimeout(() => setIsCustomTesting(false), 2600);
+      setTimeout(() => setIsFarsiCustomTesting(false), 2600);
     }
   };
 
-  const handleClearCustomConfig = async () => {
-    await clearCustomTtsConfig();
-    setCustomConfig(DEFAULT_CUSTOM_TTS_CONFIG);
-    setCustomKeyInput('');
-    setFarsiTtsNotice('Custom TTS endpoint cleared.');
+  const handleClearFarsiCustomConfig = async () => {
+    await clearCustomTtsConfig('farsi');
+    setFarsiCustomConfig(DEFAULT_CUSTOM_TTS_CONFIG);
+    setFarsiCustomKeyInput('');
+    setFarsiTtsNotice('تنظیمات موتور اختصاصی فارسی پاک شد.');
     setTimeout(() => setFarsiTtsNotice(null), 3000);
   };
 
@@ -669,47 +763,6 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
               />
             </div>
 
-            {/* RSVP Words Shown & Horizontal Reel Mode */}
-            <div className="p-3 rounded-xl border border-white/5 bg-black/10 space-y-2.5">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className={`text-xs font-semibold ${theme.textPrimary}`}>
-                    RSVP Words Shown (Horizontal Swipe Reel)
-                  </div>
-                  <div className={`text-[11px] ${theme.textMuted}`}>
-                    Aligns last, current, and next words horizontally and swipes as voice reads
-                  </div>
-                </div>
-                <span className="font-mono text-xs font-bold px-2 py-0.5 rounded bg-red-500/10 text-red-400">
-                  {settings.chunkSize || 1} {settings.chunkSize === 1 ? 'word' : 'words'}
-                </span>
-              </div>
-
-              <div className={`grid grid-cols-3 p-1 rounded-xl border ${theme.borderClass} ${theme.accentSurface} gap-1`}>
-                {([1, 3, 5] as const).map((count) => {
-                  const isSelected = (settings.chunkSize || 1) === count;
-                  return (
-                    <button
-                      key={count}
-                      type="button"
-                      onClick={() => onUpdateSettings({ chunkSize: count })}
-                      className={`py-1.5 px-2 rounded-lg text-xs font-semibold transition-all flex flex-col items-center justify-center gap-0.5 ${
-                        isSelected
-                          ? 'text-white shadow-xs'
-                          : `${theme.textMuted} hover:${theme.textPrimary}`
-                      }`}
-                      style={isSelected ? { backgroundColor: highlight.hex } : undefined}
-                    >
-                      <span className="font-bold">{count} {count === 1 ? 'Word' : 'Words'}</span>
-                      <span className="text-[9px] opacity-80 font-normal">
-                        {count === 1 ? 'Single' : count === 3 ? 'Last / Now / Next' : '5 Words Reel'}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
             {/* Optical Center Lock */}
             <div className="flex items-center justify-between p-3 rounded-xl border border-white/5 bg-black/10">
               <div>
@@ -1122,290 +1175,208 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
 
               {settings.speechNarration && (
                 <div className="mt-4 pt-3 border-t border-slate-700/30 space-y-4 animate-in fade-in duration-200">
-                  {/* Voice Selector */}
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <span className={`text-[11px] font-bold uppercase tracking-wider ${theme.textMuted}`}>
-                        Selected Voice Provider
+                  {/* Smart Language Detection & Segmented Tabs */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className={`font-semibold ${theme.textMuted} flex items-center gap-1.5`}>
+                        <Globe className="w-3.5 h-3.5 text-blue-400" />
+                        TTS Language Mode
                       </span>
-                      <button
-                        id="test-voice-preview-btn"
-                        type="button"
-                        onClick={handlePreviewVoice}
-                        disabled={isPreviewPlaying}
-                        className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold border border-red-500/30 bg-red-500/10 hover:bg-red-500/20 text-red-400 transition-colors"
-                      >
-                        <Play className="w-3 h-3 fill-current" />
-                        <span>{isPreviewPlaying ? 'Speaking...' : 'Test Voice (تست صدا)'}</span>
-                      </button>
+                      {isFarsiContent ? (
+                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-red-500/15 border border-red-500/30 text-red-300 flex items-center gap-1">
+                          <span>🇮🇷</span> Auto-detected: Farsi
+                        </span>
+                      ) : (
+                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-500/15 border border-blue-500/30 text-blue-300 flex items-center gap-1">
+                          <span>🌐</span> Auto-detected: English
+                        </span>
+                      )}
                     </div>
 
-                    {(() => {
-                      const customVoices = availableVoices.filter(
-                        (v) => v.isCustom || v.voiceURI === 'custom-endpoint' || v.voiceURI === 'farsi-custom'
-                      );
-                      const farsiVoices = availableVoices.filter(
-                        (v) => !v.isCustom && v.voiceURI !== 'custom-endpoint' && v.voiceURI !== 'farsi-custom' && (v.isFarsi || v.lang.startsWith('fa') || v.voiceURI.startsWith('farsi-'))
-                      );
-                      const otherVoices = availableVoices.filter(
-                        (v) => !v.isCustom && v.voiceURI !== 'custom-endpoint' && v.voiceURI !== 'farsi-custom' && !v.isFarsi && !v.lang.startsWith('fa') && !v.voiceURI.startsWith('farsi-')
-                      );
-
-                      return (
-                        <select
-                          id="speech-voice-select"
-                          value={settings.speechVoiceURI || ''}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            const engine: FarsiTtsEngineType | undefined = 
-                              val === 'farsi-piper-neural' ? 'piper' : 
-                              val === 'farsi-espeak-wasm' ? 'espeak' : 
-                              (val === 'custom-endpoint' || val === 'farsi-custom') ? 'custom' : undefined;
-                            if (engine) {
-                              farsiOfflineTts.setEngine(engine);
-                              onUpdateSettings({ speechVoiceURI: val, farsiTtsEngine: engine });
-                            } else {
-                              onUpdateSettings({ speechVoiceURI: val });
-                            }
-                          }}
-                          aria-label="Select Voice"
-                          className={`w-full p-2.5 rounded-xl border text-xs font-medium ${theme.borderClass} ${theme.inputBg} ${theme.textPrimary} focus:outline-none focus:border-red-500 transition-colors cursor-pointer`}
-                        >
-                          <option value="">Default System Voice (Auto-detect Language)</option>
-                          <optgroup label="🎙️ Custom Endpoint (OpenAI / BYO API - All Languages)">
-                            <option value="custom-endpoint">
-                              🎙️ Custom Endpoint (/v1/audio/speech - All Languages)
-                            </option>
-                          </optgroup>
-                          {farsiVoices.length > 0 && (
-                            <optgroup label="🇮🇷 Farsi / Persian Voices (گویندگان فارسی)">
-                              {farsiVoices.map((v) => (
-                                <option key={v.voiceURI} value={v.voiceURI}>
-                                  {v.name} ({v.lang}) — {v.provider}
-                                </option>
-                              ))}
-                            </optgroup>
-                          )}
-                          {otherVoices.length > 0 && (
-                            <optgroup label="🌐 English & System Voices">
-                              {otherVoices.map((v) => (
-                                <option key={v.voiceURI} value={v.voiceURI}>
-                                  {v.name} ({v.lang}) — {v.provider}
-                                </option>
-                              ))}
-                            </optgroup>
-                          )}
-                        </select>
-                      );
-                    })()}
-
-                    {/* Farsi Optimal Preset Quick Action */}
-                    <div className="flex items-center justify-between pt-1">
+                    <div className="grid grid-cols-2 p-1 rounded-xl bg-black/40 border border-white/10 gap-1">
                       <button
                         type="button"
-                        onClick={() => {
-                          farsiOfflineTts.setEngine('piper');
-                          onUpdateSettings({
-                            fontFamily: 'vazirmatn',
-                            speechVoiceURI: 'farsi-piper-neural',
-                            farsiTtsEngine: 'piper',
-                            speechNarration: true,
-                            highlightStyle: 'middle-two',
-                          });
-                        }}
-                        className="text-[11px] font-medium text-red-400 hover:text-red-300 transition-colors flex items-center gap-1 underline underline-offset-2"
+                        onClick={() => setSelectedTtsLang('english')}
+                        className={`py-1.5 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                          selectedTtsLang === 'english'
+                            ? 'bg-blue-600 text-white shadow-xs'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
                       >
-                        <span>🇮🇷 بهینه‌سازی سریع برای فارسی (Apply Farsi Font & Voice)</span>
+                        <span>🌐 English TTS</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedTtsLang('farsi')}
+                        className={`py-1.5 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                          selectedTtsLang === 'farsi'
+                            ? 'bg-red-600 text-white shadow-xs'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <span>🇮🇷 Farsi TTS</span>
                       </button>
                     </div>
                   </div>
 
-                  {/* Voice Pitch & Volume Sliders */}
-                  <div className="grid grid-cols-2 gap-3">
-                    {/* Pitch */}
-                    <div className="space-y-1.5">
-                      <div className="flex items-center justify-between text-[11px]">
-                        <span className={`font-semibold ${theme.textMuted}`}>Pitch</span>
-                        <span className={`font-mono font-bold ${theme.textPrimary}`}>
-                          {settings.speechPitch.toFixed(1)}x
-                        </span>
-                      </div>
-                      <input
-                        id="speech-pitch-slider"
-                        type="range"
-                        min="0.6"
-                        max="1.4"
-                        step="0.1"
-                        value={settings.speechPitch}
-                        onChange={(e) => onUpdateSettings({ speechPitch: parseFloat(e.target.value) })}
-                        className="w-full h-1.5 rounded-lg appearance-none cursor-pointer bg-slate-700 accent-red-500"
-                      />
-                    </div>
+                  {/* =========================================================================
+                      ENGLISH TTS SETTINGS (Rendered when English mode is selected)
+                      Offline Farsi TTS is NOT shown here.
+                      ========================================================================= */}
+                  {selectedTtsLang === 'english' && (
+                    <div className="space-y-4 animate-in fade-in duration-150">
+                      {/* English Voice Selector */}
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <span className={`text-[11px] font-bold uppercase tracking-wider ${theme.textMuted}`}>
+                            English Voice Provider
+                          </span>
+                          <button
+                            id="test-voice-preview-btn"
+                            type="button"
+                            onClick={() => {
+                              speechNarrator.previewVoice(
+                                settings.speechVoiceURI || '',
+                                settings.speechPitch || 1.0,
+                                1.0,
+                                settings.speechVolume
+                              );
+                            }}
+                            disabled={isPreviewPlaying}
+                            className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold border border-blue-500/30 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 transition-colors cursor-pointer"
+                          >
+                            <Play className="w-3 h-3 fill-current" />
+                            <span>{isPreviewPlaying ? 'Speaking...' : 'Test Voice'}</span>
+                          </button>
+                        </div>
 
-                    {/* Volume */}
-                    <div className="space-y-1.5">
-                      <div className="flex items-center justify-between text-[11px]">
-                        <span className={`font-semibold ${theme.textMuted}`}>Volume</span>
-                        <span className={`font-mono font-bold ${theme.textPrimary}`}>
-                          {Math.round(settings.speechVolume * 100)}%
-                        </span>
-                      </div>
-                      <input
-                        id="speech-volume-slider"
-                        type="range"
-                        min="0.1"
-                        max="1"
-                        step="0.05"
-                        value={settings.speechVolume}
-                        onChange={(e) => onUpdateSettings({ speechVolume: parseFloat(e.target.value) })}
-                        className="w-full h-1.5 rounded-lg appearance-none cursor-pointer bg-slate-700 accent-red-500"
-                      />
-                    </div>
-                  </div>
+                        {(() => {
+                          const otherVoices = availableVoices.filter(
+                            (v) => !v.isCustom && v.voiceURI !== 'custom-endpoint' && v.voiceURI !== 'farsi-custom' && v.voiceURI !== 'english-custom' && !v.isFarsi && !v.lang.startsWith('fa') && !v.voiceURI.startsWith('farsi-')
+                          );
 
-                  {/* Dual-Engine Offline Farsi TTS Panel */}
-                  <div className="p-3.5 rounded-xl border border-red-500/25 bg-red-950/20 space-y-3.5">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Cpu className="w-4 h-4 text-red-400" />
-                        <div>
-                          <div className={`text-xs font-bold ${theme.textPrimary}`}>
-                            موتور گفتار آفلاین فارسی (Offline Farsi TTS)
+                          return (
+                            <select
+                              id="speech-voice-select-english"
+                              value={settings.speechVoiceURI || ''}
+                              onChange={(e) => onUpdateSettings({ speechVoiceURI: e.target.value })}
+                              aria-label="Select English Voice"
+                              className={`w-full p-2.5 rounded-xl border text-xs font-medium ${theme.borderClass} ${theme.inputBg} ${theme.textPrimary} focus:outline-none focus:border-blue-500 transition-colors cursor-pointer`}
+                            >
+                              <option value="">Default System Voice (Auto-detect)</option>
+                              <optgroup label="🎙️ English Custom Endpoint (BYO Model)">
+                                <option value="english-custom">
+                                  🎙️ English Custom Endpoint (/v1/audio/speech)
+                                </option>
+                              </optgroup>
+                              {otherVoices.length > 0 && (
+                                <optgroup label="🌐 English & System Voices">
+                                  {otherVoices.map((v) => (
+                                    <option key={v.voiceURI} value={v.voiceURI}>
+                                      {v.name} ({v.lang}) — {v.provider}
+                                    </option>
+                                  ))}
+                                </optgroup>
+                              )}
+                            </select>
+                          );
+                        })()}
+                      </div>
+
+                      {/* English Voice Pitch & Volume Sliders */}
+                      <div className="grid grid-cols-2 gap-3">
+                        {/* Pitch */}
+                        <div className="space-y-1.5">
+                          <div className="flex items-center justify-between text-[11px]">
+                            <span className={`font-semibold ${theme.textMuted}`}>Pitch</span>
+                            <span className={`font-mono font-bold ${theme.textPrimary}`}>
+                              {settings.speechPitch.toFixed(1)}x
+                            </span>
                           </div>
-                          <div className={`text-[10px] ${theme.textMuted}`}>
-                            100% بدون اینترنت (Manifest V3 Offscreen & WASM Pipeline)
+                          <input
+                            id="speech-pitch-slider-en"
+                            type="range"
+                            min="0.6"
+                            max="1.4"
+                            step="0.1"
+                            value={settings.speechPitch}
+                            onChange={(e) => onUpdateSettings({ speechPitch: parseFloat(e.target.value) })}
+                            className="w-full h-1.5 rounded-lg appearance-none cursor-pointer bg-slate-700 accent-blue-500"
+                          />
+                        </div>
+
+                        {/* Volume */}
+                        <div className="space-y-1.5">
+                          <div className="flex items-center justify-between text-[11px]">
+                            <span className={`font-semibold ${theme.textMuted}`}>Volume</span>
+                            <span className={`font-mono font-bold ${theme.textPrimary}`}>
+                              {Math.round(settings.speechVolume * 100)}%
+                            </span>
                           </div>
+                          <input
+                            id="speech-volume-slider-en"
+                            type="range"
+                            min="0.1"
+                            max="1"
+                            step="0.05"
+                            value={settings.speechVolume}
+                            onChange={(e) => onUpdateSettings({ speechVolume: parseFloat(e.target.value) })}
+                            className="w-full h-1.5 rounded-lg appearance-none cursor-pointer bg-slate-700 accent-blue-500"
+                          />
                         </div>
                       </div>
-                      <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-red-500/15 border border-red-500/30 text-red-300 font-semibold">
-                        Dual-Engine
-                      </span>
-                    </div>
 
-                    {/* Engine Selection Toggle Buttons */}
-                    <div className="grid grid-cols-3 gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleSelectFarsiEngine('espeak')}
-                        className={`p-2.5 rounded-xl border text-left transition-all relative ${
-                          currentFarsiEngine === 'espeak'
-                            ? 'border-red-500 bg-red-500/15 shadow-xs ring-1 ring-red-500/40'
-                            : 'border-white/5 bg-black/20 hover:border-white/10 opacity-75'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-xs font-bold text-white flex items-center gap-1.5">
-                            <Zap className="w-3.5 h-3.5 text-amber-400" />
-                            eSpeak NG (WASM)
-                          </span>
-                          {currentFarsiEngine === 'espeak' && (
-                            <CheckCircle2 className="w-3.5 h-3.5 text-red-400" />
-                          )}
-                        </div>
-                        <p className={`text-[10px] ${theme.textMuted} leading-tight`}>
-                          سریع، فوری و سبک (&lt; 5MB)<br />صدای رباتیک آکوستیک
-                        </p>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => handleSelectFarsiEngine('piper')}
-                        className={`p-2.5 rounded-xl border text-left transition-all relative ${
-                          currentFarsiEngine === 'piper'
-                            ? 'border-red-500 bg-red-500/15 shadow-xs ring-1 ring-red-500/40'
-                            : 'border-white/5 bg-black/20 hover:border-white/10 opacity-75'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-xs font-bold text-white flex items-center gap-1.5">
-                            <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-                            Piper Neural (ONNX)
-                          </span>
-                          {currentFarsiEngine === 'piper' && (
-                            <CheckCircle2 className="w-3.5 h-3.5 text-red-400" />
-                          )}
-                        </div>
-                        <p className={`text-[10px] ${theme.textMuted} leading-tight`}>
-                          طبیعی و عصبی (امیر fa_IR)<br />کیفیت بالا (~25MB)
-                        </p>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => handleSelectFarsiEngine('custom')}
-                        className={`p-2.5 rounded-xl border text-left transition-all relative ${
-                          currentFarsiEngine === 'custom'
-                            ? 'border-red-500 bg-red-500/15 shadow-xs ring-1 ring-red-500/40'
-                            : 'border-white/5 bg-black/20 hover:border-white/10 opacity-75'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-xs font-bold text-white flex items-center gap-1.5">
-                            <Headphones className="w-3.5 h-3.5 text-emerald-400" />
-                            Custom Endpoint
-                          </span>
-                          {currentFarsiEngine === 'custom' && (
-                            <CheckCircle2 className="w-3.5 h-3.5 text-red-400" />
-                          )}
-                        </div>
-                        <p className={`text-[10px] ${theme.textMuted} leading-tight`}>
-                          مدل خودت (BYO)<br />OpenAI-compatible /v1/audio/speech
-                        </p>
-                      </button>
-                    </div>
-
-                    {/* Custom (BYO) Endpoint Configuration */}
-                    {(currentFarsiEngine === 'custom' || settings.speechVoiceURI === 'custom-endpoint' || settings.speechVoiceURI === 'farsi-custom') && (
-                      <div className="p-3 rounded-xl bg-black/40 border border-emerald-500/30 space-y-2.5">
+                      {/* Dedicated English Custom TTS Endpoint Card (OUTSIDE Farsi component) */}
+                      <div className="p-3.5 rounded-xl bg-slate-900/90 border border-blue-500/30 space-y-2.5">
                         <div className="flex items-center justify-between text-xs">
-                          <span className="font-bold text-emerald-300 flex items-center gap-1.5">
-                            <Headphones className="w-4 h-4 text-emerald-400" />
-                            Custom TTS Endpoint (All Languages / تمام زبان‌ها)
+                          <span className="font-bold text-blue-300 flex items-center gap-1.5">
+                            <Headphones className="w-4 h-4 text-blue-400" />
+                            English Custom TTS Endpoint (BYO Model)
                           </span>
-                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-mono">
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/15 border border-blue-500/30 text-blue-300 font-mono">
                             OpenAI API Compatible
                           </span>
                         </div>
                         <p className={`text-[11px] ${theme.textMuted} leading-relaxed`}>
-                          OpenAI-compatible speech endpoint (/v1/audio/speech). Supports <strong>all languages</strong> (English, Farsi, etc.) in both RSVP and full-text flow.
+                          OpenAI-compatible speech endpoint (/v1/audio/speech) configured specifically for English reading (e.g. OpenAI <code className="text-blue-300 font-mono">tts-1</code>, Kokoro <code className="text-blue-300 font-mono">af_heart</code>, LocalAI).
                         </p>
                         <div className="space-y-1.5">
                           <label className="text-[10px] text-slate-400 font-medium">Base URL / Endpoint:</label>
                           <input
                             type="text"
-                            value={customConfig.baseUrl}
-                            onChange={(e) => setCustomConfig((c) => ({ ...c, baseUrl: e.target.value }))}
+                            value={englishCustomConfig.baseUrl}
+                            onChange={(e) => setEnglishCustomConfig((c) => ({ ...c, baseUrl: e.target.value }))}
                             placeholder="https://api.openai.com/v1"
-                            className="w-full px-2.5 py-1.5 rounded-lg bg-black/40 border border-white/10 text-[11px] text-slate-200 focus:border-emerald-500/50 outline-none"
+                            className="w-full px-2.5 py-1.5 rounded-lg bg-black/40 border border-white/10 text-[11px] text-slate-200 focus:border-blue-500/50 outline-none"
                           />
-                          <label className="text-[10px] text-slate-400 font-medium">API Key (Bearer token - optional for self-hosted):</label>
+                          <label className="text-[10px] text-slate-400 font-medium">API Key (Bearer token - optional for localhost):</label>
                           <input
                             type="password"
-                            value={customKeyInput}
-                            onChange={(e) => setCustomKeyInput(e.target.value)}
+                            value={englishCustomKeyInput}
+                            onChange={(e) => setEnglishCustomKeyInput(e.target.value)}
                             placeholder="API key (Bearer token or sk-...)"
                             autoComplete="off"
-                            className="w-full px-2.5 py-1.5 rounded-lg bg-black/40 border border-white/10 text-[11px] text-slate-200 focus:border-emerald-500/50 outline-none"
+                            className="w-full px-2.5 py-1.5 rounded-lg bg-black/40 border border-white/10 text-[11px] text-slate-200 focus:border-blue-500/50 outline-none"
                           />
                           <div className="grid grid-cols-2 gap-1.5">
                             <div>
                               <label className="text-[10px] text-slate-400 font-medium">Model:</label>
                               <input
                                 type="text"
-                                value={customConfig.model}
-                                onChange={(e) => setCustomConfig((c) => ({ ...c, model: e.target.value }))}
+                                value={englishCustomConfig.model}
+                                onChange={(e) => setEnglishCustomConfig((c) => ({ ...c, model: e.target.value }))}
                                 placeholder="model (e.g. tts-1, kokoro)"
-                                className="w-full px-2.5 py-1.5 rounded-lg bg-black/40 border border-white/10 text-[11px] text-slate-200 focus:border-emerald-500/50 outline-none"
+                                className="w-full px-2.5 py-1.5 rounded-lg bg-black/40 border border-white/10 text-[11px] text-slate-200 focus:border-blue-500/50 outline-none"
                               />
                             </div>
                             <div>
                               <label className="text-[10px] text-slate-400 font-medium">Voice Name:</label>
                               <input
                                 type="text"
-                                value={customConfig.voice}
-                                onChange={(e) => setCustomConfig((c) => ({ ...c, voice: e.target.value }))}
+                                value={englishCustomConfig.voice}
+                                onChange={(e) => setEnglishCustomConfig((c) => ({ ...c, voice: e.target.value }))}
                                 placeholder="voice (e.g. alloy, nova)"
-                                className="w-full px-2.5 py-1.5 rounded-lg bg-black/40 border border-white/10 text-[11px] text-slate-200 focus:border-emerald-500/50 outline-none"
+                                className="w-full px-2.5 py-1.5 rounded-lg bg-black/40 border border-white/10 text-[11px] text-slate-200 focus:border-blue-500/50 outline-none"
                               />
                             </div>
                           </div>
@@ -1414,166 +1385,377 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                           <div className="flex items-center gap-1.5">
                             <button
                               type="button"
-                              onClick={handleSaveCustomConfig}
-                              className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold transition-colors cursor-pointer"
+                              onClick={handleSaveEnglishCustomConfig}
+                              className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-bold transition-colors cursor-pointer"
                             >
                               <Check className="w-3 h-3" />
-                              <span>ذخیره (Save)</span>
+                              <span>Save Endpoint</span>
                             </button>
                             <button
                               type="button"
-                              onClick={handleTestCustomEndpoint}
-                              disabled={isCustomTesting}
-                              className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 text-[11px] font-bold transition-colors cursor-pointer"
+                              onClick={handleTestEnglishCustomEndpoint}
+                              disabled={isEnglishCustomTesting}
+                              className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-blue-500/40 bg-blue-500/10 hover:bg-blue-500/20 text-blue-300 text-[11px] font-bold transition-colors cursor-pointer"
                             >
                               <Play className="w-3 h-3 fill-current" />
-                              <span>{isCustomTesting ? 'در حال تست...' : 'تست اتصال (Test)'}</span>
+                              <span>{isEnglishCustomTesting ? 'Testing...' : 'Test Endpoint'}</span>
                             </button>
                           </div>
                           <button
                             type="button"
-                            onClick={handleClearCustomConfig}
+                            onClick={handleClearEnglishCustomConfig}
                             className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-slate-400 hover:text-red-400 border border-white/5 hover:border-red-500/30 transition-colors cursor-pointer"
                           >
                             <Trash2 className="w-3 h-3" />
-                            <span>پاک‌کردن</span>
+                            <span>Clear</span>
                           </button>
                         </div>
-                        <p className="text-[9px] text-slate-500 leading-snug">
-                          کلید و تنظیمات فقط روی همین دستگاه ذخیره می‌شوند. هنگام استفاده از این موتور، متن خوانش مستقیماً به آدرس سرور شما ارسال می‌شود.
-                        </p>
-                      </div>
-                    )}
-
-                    {/* Piper Model Cache & Download Status Card */}
-                    <div className="p-2.5 rounded-lg bg-black/30 border border-white/5 space-y-2">
-                      <div className="flex items-center justify-between text-[11px]">
-                        <span className="font-semibold text-slate-300 flex items-center gap-1.5">
-                          <Layers className="w-3.5 h-3.5 text-slate-400" />
-                          وضعیت مدل هوش مصنوعی (Piper Model)
-                        </span>
-
-                        {piperCache.isOfflineReady ? (
-                          <span className="flex items-center gap-1 text-[10px] font-semibold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/30">
-                            <Check className="w-3 h-3" />
-                            ذخیره در IndexedDB (آماده آفلاین)
-                          </span>
-                        ) : piperCache.status === 'downloading' ? (
-                          <span className="flex items-center gap-1 text-[10px] font-semibold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full border border-amber-500/30">
-                            <Activity className="w-3 h-3 animate-spin" />
-                            دانلود: {piperCache.downloadProgress}%
-                          </span>
-                        ) : (
-                          <span className="text-[10px] font-semibold text-slate-400 bg-slate-800 px-2 py-0.5 rounded-full border border-slate-700">
-                            دانلود نشده (فال‌بک فعال)
-                          </span>
+                        {englishTtsNotice && (
+                          <div className="p-2 rounded-lg bg-blue-500/10 border border-blue-500/30 text-blue-300 text-[11px] flex items-center gap-1.5">
+                            <span>{englishTtsNotice}</span>
+                          </div>
                         )}
                       </div>
+                    </div>
+                  )}
 
-                      {/* Download Progress Bar */}
-                      {piperCache.status === 'downloading' && (
-                        <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
-                          <div 
-                            className="bg-red-500 h-full transition-all duration-300"
-                            style={{ width: `${piperCache.downloadProgress}%` }}
-                          />
+                  {/* =========================================================================
+                      FARSI TTS SETTINGS (Rendered when Farsi mode is selected / Farsi text detected)
+                      Dual-Engine Offline Farsi TTS Panel opens up here!
+                      ========================================================================= */}
+                  {selectedTtsLang === 'farsi' && (
+                    <div className="space-y-4 animate-in fade-in duration-150">
+                      {/* Farsi Optimal Preset Quick Action */}
+                      <div className="flex items-center justify-between p-2 rounded-xl bg-red-950/30 border border-red-500/20">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            farsiOfflineTts.setEngine('piper');
+                            onUpdateSettings({
+                              fontFamily: 'vazirmatn',
+                              speechVoiceURI: 'farsi-piper-neural',
+                              farsiTtsEngine: 'piper',
+                              speechNarration: true,
+                              highlightStyle: 'middle-two',
+                            });
+                          }}
+                          className="text-[11px] font-medium text-red-400 hover:text-red-300 transition-colors flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Sparkles className="w-3.5 h-3.5 text-red-400" />
+                          <span>🇮🇷 بهینه‌سازی سریع برای فارسی (Apply Farsi Font & Voice)</span>
+                        </button>
+                      </div>
+
+                      {/* Dual-Engine Offline Farsi TTS Panel */}
+                      <div className="p-3.5 rounded-xl border border-red-500/25 bg-red-950/20 space-y-3.5">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Cpu className="w-4 h-4 text-red-400" />
+                            <div>
+                              <div className={`text-xs font-bold ${theme.textPrimary}`}>
+                                موتور گفتار آفلاین فارسی (Offline Farsi TTS)
+                              </div>
+                              <div className={`text-[10px] ${theme.textMuted}`}>
+                                100% بدون اینترنت (Manifest V3 Offscreen & WASM Pipeline)
+                              </div>
+                            </div>
+                          </div>
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-red-500/15 border border-red-500/30 text-red-300 font-semibold">
+                            Dual-Engine
+                          </span>
                         </div>
-                      )}
 
-                      <div className="flex items-center justify-between pt-1">
-                        {!piperCache.isOfflineReady ? (
+                        {/* Engine Selection Toggle Buttons */}
+                        <div className="grid grid-cols-3 gap-2">
                           <button
                             type="button"
-                            onClick={handleDownloadPiper}
-                            disabled={piperCache.status === 'downloading'}
-                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white text-[11px] font-bold shadow-xs transition-colors disabled:opacity-50 cursor-pointer"
+                            onClick={() => handleSelectFarsiEngine('espeak')}
+                            className={`p-2.5 rounded-xl border text-left transition-all relative ${
+                              currentFarsiEngine === 'espeak'
+                                ? 'border-red-500 bg-red-500/15 shadow-xs ring-1 ring-red-500/40'
+                                : 'border-white/5 bg-black/20 hover:border-white/10 opacity-75'
+                            }`}
                           >
-                            <Download className="w-3.5 h-3.5" />
-                            <span>{piperCache.status === 'downloading' ? 'در حال دانلود...' : 'دانلود و ذخیره آفلاین مدل (~25MB)'}</span>
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                                <Zap className="w-3.5 h-3.5 text-amber-400" />
+                                eSpeak NG (WASM)
+                              </span>
+                              {currentFarsiEngine === 'espeak' && (
+                                <CheckCircle2 className="w-3.5 h-3.5 text-red-400" />
+                              )}
+                            </div>
+                            <p className={`text-[10px] ${theme.textMuted} leading-tight`}>
+                              سریع، فوری و سبک (&lt; 5MB)<br />صدای رباتیک آکوستیک
+                            </p>
                           </button>
-                        ) : (
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={handleClearPiperCache}
-                              className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-slate-400 hover:text-red-400 border border-white/5 hover:border-red-500/30 transition-colors cursor-pointer"
-                              title="حذف مدل از حافظه محلی برای آزادسازی فضا"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                              <span>پاک‌کردن کش</span>
-                            </button>
-                            <span className="text-[10px] text-slate-400">
-                              حجم: {(piperCache.sizeBytes / (1024 * 1024)).toFixed(1)} MB
-                            </span>
+
+                          <button
+                            type="button"
+                            onClick={() => handleSelectFarsiEngine('piper')}
+                            className={`p-2.5 rounded-xl border text-left transition-all relative ${
+                              currentFarsiEngine === 'piper'
+                                ? 'border-red-500 bg-red-500/15 shadow-xs ring-1 ring-red-500/40'
+                                : 'border-white/5 bg-black/20 hover:border-white/10 opacity-75'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                                <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                                Piper Neural (ONNX)
+                              </span>
+                              {currentFarsiEngine === 'piper' && (
+                                <CheckCircle2 className="w-3.5 h-3.5 text-red-400" />
+                              )}
+                            </div>
+                            <p className={`text-[10px] ${theme.textMuted} leading-tight`}>
+                              طبیعی و عصبی (امیر fa_IR)<br />کیفیت بالا (~25MB)
+                            </p>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleSelectFarsiEngine('custom')}
+                            className={`p-2.5 rounded-xl border text-left transition-all relative ${
+                              currentFarsiEngine === 'custom'
+                                ? 'border-red-500 bg-red-500/15 shadow-xs ring-1 ring-red-500/40'
+                                : 'border-white/5 bg-black/20 hover:border-white/10 opacity-75'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                                <Headphones className="w-3.5 h-3.5 text-emerald-400" />
+                                Custom Endpoint
+                              </span>
+                              {currentFarsiEngine === 'custom' && (
+                                <CheckCircle2 className="w-3.5 h-3.5 text-red-400" />
+                              )}
+                            </div>
+                            <p className={`text-[10px] ${theme.textMuted} leading-tight`}>
+                              مدل خودت (BYO)<br />سرور اختصاصی فارسی
+                            </p>
+                          </button>
+                        </div>
+
+                        {/* Separate Farsi Custom Endpoint Configuration */}
+                        {currentFarsiEngine === 'custom' && (
+                          <div className="p-3 rounded-xl bg-black/40 border border-emerald-500/30 space-y-2.5 animate-in fade-in duration-150">
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="font-bold text-emerald-300 flex items-center gap-1.5">
+                                <Headphones className="w-4 h-4 text-emerald-400" />
+                                موتور گفتار سفارشی فارسی (Farsi Custom Endpoint)
+                              </span>
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-mono">
+                                OpenAI Compatible
+                              </span>
+                            </div>
+                            <p className={`text-[11px] ${theme.textMuted} leading-relaxed`}>
+                              تنظیم سرور OpenAI-compatible برای مدل‌های گفتاری فارسی (مانند Kokoro Persian، Vahid، یا سرور محلی).
+                            </p>
+                            <div className="space-y-1.5">
+                              <label className="text-[10px] text-slate-400 font-medium">آدرس سرور (Base URL / Endpoint):</label>
+                              <input
+                                type="text"
+                                value={farsiCustomConfig.baseUrl}
+                                onChange={(e) => setFarsiCustomConfig((c) => ({ ...c, baseUrl: e.target.value }))}
+                                placeholder="https://api.openai.com/v1"
+                                className="w-full px-2.5 py-1.5 rounded-lg bg-black/40 border border-white/10 text-[11px] text-slate-200 focus:border-emerald-500/50 outline-none"
+                              />
+                              <label className="text-[10px] text-slate-400 font-medium">کلید API (اختیاری برای سرور محلی):</label>
+                              <input
+                                type="password"
+                                value={farsiCustomKeyInput}
+                                onChange={(e) => setFarsiCustomKeyInput(e.target.value)}
+                                placeholder="API key (Bearer token)"
+                                autoComplete="off"
+                                className="w-full px-2.5 py-1.5 rounded-lg bg-black/40 border border-white/10 text-[11px] text-slate-200 focus:border-emerald-500/50 outline-none"
+                              />
+                              <div className="grid grid-cols-2 gap-1.5">
+                                <div>
+                                  <label className="text-[10px] text-slate-400 font-medium">نام مدل (Model):</label>
+                                  <input
+                                    type="text"
+                                    value={farsiCustomConfig.model}
+                                    onChange={(e) => setFarsiCustomConfig((c) => ({ ...c, model: e.target.value }))}
+                                    placeholder="fa-tts یا tts-1"
+                                    className="w-full px-2.5 py-1.5 rounded-lg bg-black/40 border border-white/10 text-[11px] text-slate-200 focus:border-emerald-500/50 outline-none"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-[10px] text-slate-400 font-medium">نام گوینده (Voice):</label>
+                                  <input
+                                    type="text"
+                                    value={farsiCustomConfig.voice}
+                                    onChange={(e) => setFarsiCustomConfig((c) => ({ ...c, voice: e.target.value }))}
+                                    placeholder="vahid یا alloy"
+                                    className="w-full px-2.5 py-1.5 rounded-lg bg-black/40 border border-white/10 text-[11px] text-slate-200 focus:border-emerald-500/50 outline-none"
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                            <div className="flex items-center justify-between pt-1">
+                              <div className="flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={handleSaveFarsiCustomConfig}
+                                  className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold transition-colors cursor-pointer"
+                                >
+                                  <Check className="w-3 h-3" />
+                                  <span>ذخیره تنظیمات فارسی</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={handleTestFarsiCustomEndpoint}
+                                  disabled={isFarsiCustomTesting}
+                                  className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 text-[11px] font-bold transition-colors cursor-pointer"
+                                >
+                                  <Play className="w-3 h-3 fill-current" />
+                                  <span>{isFarsiCustomTesting ? 'در حال تست...' : 'تست اتصال فارسی'}</span>
+                                </button>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={handleClearFarsiCustomConfig}
+                                className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-slate-400 hover:text-red-400 border border-white/5 hover:border-red-500/30 transition-colors cursor-pointer"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                                <span>پاک‌کردن</span>
+                              </button>
+                            </div>
                           </div>
                         )}
 
-                        {/* Test Button for Offline Farsi TTS */}
-                        <button
-                          type="button"
-                          onClick={handleTestFarsiOfflineTts}
-                          disabled={isFarsiPreviewPlaying}
-                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-500/40 bg-red-500/10 hover:bg-red-500/20 text-red-300 text-[11px] font-bold transition-all cursor-pointer shadow-xs"
-                        >
-                          <Play className="w-3 h-3 fill-current" />
-                          <span>{isFarsiPreviewPlaying ? 'در حال پخش...' : 'تست گفتار فارسی (Test)'}</span>
-                        </button>
+                        {/* Piper Model Cache & Download Status Card */}
+                        <div className="p-2.5 rounded-lg bg-black/30 border border-white/5 space-y-2">
+                          <div className="flex items-center justify-between text-[11px]">
+                            <span className="font-semibold text-slate-300 flex items-center gap-1.5">
+                              <Layers className="w-3.5 h-3.5 text-slate-400" />
+                              وضعیت مدل هوش مصنوعی (Piper Model)
+                            </span>
+
+                            {piperCache.isOfflineReady ? (
+                              <span className="flex items-center gap-1 text-[10px] font-semibold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/30">
+                                <Check className="w-3 h-3" />
+                                ذخیره در IndexedDB (آماده آفلاین)
+                              </span>
+                            ) : piperCache.status === 'downloading' ? (
+                              <span className="flex items-center gap-1 text-[10px] font-semibold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full border border-amber-500/30">
+                                <Activity className="w-3 h-3 animate-spin" />
+                                دانلود: {piperCache.downloadProgress}%
+                              </span>
+                            ) : (
+                              <span className="text-[10px] font-semibold text-slate-400 bg-slate-800 px-2 py-0.5 rounded-full border border-slate-700">
+                                دانلود نشده (فال‌بک فعال)
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Download Progress Bar */}
+                          {piperCache.status === 'downloading' && (
+                            <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+                              <div 
+                                className="bg-red-500 h-full transition-all duration-300"
+                                style={{ width: `${piperCache.downloadProgress}%` }}
+                              />
+                            </div>
+                          )}
+
+                          <div className="flex items-center justify-between pt-1">
+                            {!piperCache.isOfflineReady ? (
+                              <button
+                                type="button"
+                                onClick={handleDownloadPiper}
+                                disabled={piperCache.status === 'downloading'}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white text-[11px] font-bold shadow-xs transition-colors disabled:opacity-50 cursor-pointer"
+                              >
+                                <Download className="w-3.5 h-3.5" />
+                                <span>{piperCache.status === 'downloading' ? 'در حال دانلود...' : 'دانلود و ذخیره آفلاین مدل (~25MB)'}</span>
+                              </button>
+                            ) : (
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={handleClearPiperCache}
+                                  className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-slate-400 hover:text-red-400 border border-white/5 hover:border-red-500/30 transition-colors cursor-pointer"
+                                  title="حذف مدل از حافظه محلی برای آزادسازی فضا"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                  <span>پاک‌کردن کش</span>
+                                </button>
+                                <span className="text-[10px] text-slate-400">
+                                  حجم: {(piperCache.sizeBytes / (1024 * 1024)).toFixed(1)} MB
+                                </span>
+                              </div>
+                            )}
+
+                            {/* Test Button for Offline Farsi TTS */}
+                            <button
+                              type="button"
+                              onClick={handleTestFarsiOfflineTts}
+                              disabled={isFarsiPreviewPlaying}
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-500/40 bg-red-500/10 hover:bg-red-500/20 text-red-300 text-[11px] font-bold transition-all cursor-pointer shadow-xs"
+                            >
+                              <Play className="w-3 h-3 fill-current" />
+                              <span>{isFarsiPreviewPlaying ? 'در حال پخش...' : 'تست گفتار فارسی (Test)'}</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Notice / Feedback Banner */}
+                        {farsiTtsNotice && (
+                          <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-300 text-[11px] leading-relaxed flex items-start gap-1.5">
+                            <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
+                            <span>{farsiTtsNotice}</span>
+                          </div>
+                        )}
+
+                        {/* Farsi Speech Speed & Pitch Sliders */}
+                        <div className="grid grid-cols-2 gap-3 pt-1 border-t border-white/5">
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between text-[11px]">
+                              <span className={`font-semibold ${theme.textMuted}`}>سرعت گفتار فارسی</span>
+                              <span className={`font-mono font-bold ${theme.textPrimary}`}>
+                                {(settings.farsiTtsSpeed || 1.0).toFixed(1)}x
+                              </span>
+                            </div>
+                            <input
+                              type="range"
+                              min="0.6"
+                              max="1.8"
+                              step="0.1"
+                              value={settings.farsiTtsSpeed || 1.0}
+                              onChange={(e) => {
+                                const val = parseFloat(e.target.value);
+                                onUpdateSettings({ farsiTtsSpeed: val });
+                              }}
+                              className="w-full h-1.5 rounded-lg appearance-none cursor-pointer bg-slate-700 accent-red-500"
+                            />
+                          </div>
+
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between text-[11px]">
+                              <span className={`font-semibold ${theme.textMuted}`}>زیروبمی (Pitch)</span>
+                              <span className={`font-mono font-bold ${theme.textPrimary}`}>
+                                {(settings.farsiTtsPitch || 1.0).toFixed(1)}x
+                              </span>
+                            </div>
+                            <input
+                              type="range"
+                              min="0.7"
+                              max="1.3"
+                              step="0.1"
+                              value={settings.farsiTtsPitch || 1.0}
+                              onChange={(e) => {
+                                const val = parseFloat(e.target.value);
+                                onUpdateSettings({ farsiTtsPitch: val });
+                              }}
+                              className="w-full h-1.5 rounded-lg appearance-none cursor-pointer bg-slate-700 accent-red-500"
+                            />
+                          </div>
+                        </div>
                       </div>
                     </div>
-
-                    {/* Notice / Feedback Banner */}
-                    {farsiTtsNotice && (
-                      <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-300 text-[11px] leading-relaxed flex items-start gap-1.5">
-                        <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
-                        <span>{farsiTtsNotice}</span>
-                      </div>
-                    )}
-
-                    {/* Farsi Speech Speed & Pitch Sliders */}
-                    <div className="grid grid-cols-2 gap-3 pt-1 border-t border-white/5">
-                      <div className="space-y-1">
-                        <div className="flex items-center justify-between text-[11px]">
-                          <span className={`font-semibold ${theme.textMuted}`}>سرعت گفتار فارسی</span>
-                          <span className={`font-mono font-bold ${theme.textPrimary}`}>
-                            {(settings.farsiTtsSpeed || 1.0).toFixed(1)}x
-                          </span>
-                        </div>
-                        <input
-                          type="range"
-                          min="0.6"
-                          max="1.8"
-                          step="0.1"
-                          value={settings.farsiTtsSpeed || 1.0}
-                          onChange={(e) => {
-                            const val = parseFloat(e.target.value);
-                            onUpdateSettings({ farsiTtsSpeed: val });
-                          }}
-                          className="w-full h-1.5 rounded-lg appearance-none cursor-pointer bg-slate-700 accent-red-500"
-                        />
-                      </div>
-
-                      <div className="space-y-1">
-                        <div className="flex items-center justify-between text-[11px]">
-                          <span className={`font-semibold ${theme.textMuted}`}>زیروبمی (Pitch)</span>
-                          <span className={`font-mono font-bold ${theme.textPrimary}`}>
-                            {(settings.farsiTtsPitch || 1.0).toFixed(1)}x
-                          </span>
-                        </div>
-                        <input
-                          type="range"
-                          min="0.7"
-                          max="1.3"
-                          step="0.1"
-                          value={settings.farsiTtsPitch || 1.0}
-                          onChange={(e) => {
-                            const val = parseFloat(e.target.value);
-                            onUpdateSettings({ farsiTtsPitch: val });
-                          }}
-                          className="w-full h-1.5 rounded-lg appearance-none cursor-pointer bg-slate-700 accent-red-500"
-                        />
-                      </div>
-                    </div>
-                  </div>
+                  )}
 
                   {/* RSVP Speed Synchronization Info */}
                   <div className="p-2.5 rounded-lg bg-black/25 border border-white/5 space-y-1">
