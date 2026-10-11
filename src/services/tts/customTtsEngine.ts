@@ -22,6 +22,7 @@ import {
 import { loadCustomTtsConfig, validateCustomTtsConfig } from './customTtsConfig';
 import { playAudioBlob, AudioPlaybackHandle, validateWavBuffer } from './audioUtils';
 import { normalizePersianText } from './phonemizer/persianNormalizer';
+import { isRtlText } from '../../utils/textParser';
 
 export const CUSTOM_TTS_TIMEOUT_MS = 30_000;
 /** OpenAI-style APIs reject inputs above 4096 chars. */
@@ -31,7 +32,11 @@ type Fetcher = typeof fetch;
 
 export function buildSpeechUrl(baseUrl: string): string {
   const trimmed = baseUrl.replace(/\/+$/, '');
-  return /\/audio\/speech$/.test(trimmed) ? trimmed : `${trimmed}/audio/speech`;
+  if (/\/audio\/speech$/.test(trimmed)) return trimmed;
+  if (/\/speech$/.test(trimmed) || /\/tts$/.test(trimmed) || /\/synthesize$/.test(trimmed)) {
+    return trimmed;
+  }
+  return `${trimmed}/audio/speech`;
 }
 
 function scrub(message: string, apiKey: string): string {
@@ -89,7 +94,7 @@ export class CustomTtsEngine implements TtsEngine {
     if (validation.valid === false) return this.fail(validation.error, 'INVALID_CONFIG');
     const cfg: CustomTtsConfig = validation.config;
 
-    const input = normalizePersianText(text) || text.trim();
+    const input = isRtlText(text) ? (normalizePersianText(text) || text.trim()) : text.trim();
     if (!input) {
       return { ...this.fail('', 'EMPTY_AUDIO'), success: true, error: undefined, errorCategory: undefined };
     }

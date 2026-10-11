@@ -13,6 +13,7 @@ export interface VoiceOption {
   localService: boolean;
   provider: string;
   isFarsi?: boolean;
+  isCustom?: boolean;
 }
 
 export type WordSyncCallback = (wordIndex: number) => void;
@@ -231,6 +232,19 @@ class SpeechNarrationService {
         localService: false,
         provider: 'Custom Endpoint (/v1/audio/speech)',
         isFarsi: true,
+        isCustom: true,
+      },
+    ];
+
+    const universalCustomVoices: VoiceOption[] = [
+      {
+        name: '🎙️ Custom Endpoint (OpenAI / BYO API - All Languages)',
+        lang: 'all',
+        voiceURI: 'custom-endpoint',
+        default: false,
+        localService: false,
+        provider: 'Custom Endpoint (/v1/audio/speech - All Languages)',
+        isCustom: true,
       },
     ];
 
@@ -262,7 +276,7 @@ class SpeechNarrationService {
       };
     });
 
-    return [...farsiProviderVoices, ...mappedSystemVoices];
+    return [...universalCustomVoices, ...farsiProviderVoices, ...mappedSystemVoices];
   }
 
   /**
@@ -419,8 +433,8 @@ class SpeechNarrationService {
       return;
     }
 
-    if (voiceURI === 'farsi-custom') {
-      farsiOfflineTts.preview('custom', rate, pitch, volume);
+    if (voiceURI === 'custom-endpoint' || voiceURI === 'farsi-custom') {
+      farsiOfflineTts.preview('custom', rate, pitch, volume, undefined, 'Custom TTS endpoint is active. Testing audio narration.');
       return;
     }
 
@@ -654,14 +668,37 @@ class SpeechNarrationService {
       return;
     }
 
-    // Check if chunk is Farsi / RTL
-    const isFarsi = isRtlText(chunkText) || (Boolean(settings.speechVoiceURI) && settings.speechVoiceURI.startsWith('farsi-'));
+    // 1. Check if user explicitly selected Custom Endpoint (supports ALL languages)
+    const isCustomEndpoint =
+      settings.speechVoiceURI === 'custom-endpoint' ||
+      settings.speechVoiceURI === 'farsi-custom' ||
+      (settings.farsiTtsEngine === 'custom' && (!settings.speechVoiceURI || settings.speechVoiceURI === 'custom-endpoint' || settings.speechVoiceURI === 'farsi-custom'));
+
+    if (isCustomEndpoint) {
+      this.playFarsiOfflineTtsChunk({
+        chunkWords: this.activeChunkWords,
+        chunkStartIndex: startIndex,
+        chunkEndIndex: this.activeChunkEndIndex,
+        chunkText,
+        settings,
+        onWordSync,
+        onFinished,
+        isPlayingCheck,
+        utteranceId,
+        getCurrentWpm,
+        getWordsSlice,
+        effectiveTotalWords,
+      });
+      return;
+    }
+
+    // 2. Check if chunk is Farsi / RTL
+    const isFarsi = isRtlText(chunkText) || (Boolean(settings.speechVoiceURI) && (settings.speechVoiceURI === 'farsi-piper-neural' || settings.speechVoiceURI === 'farsi-espeak-wasm' || settings.speechVoiceURI === 'farsi-offline'));
     const detectedLang = isFarsi ? 'fa-IR' : detectLanguageFromText(chunkText);
 
     const isExplicitFarsiOfflineVoice =
       settings.speechVoiceURI === 'farsi-piper-neural' ||
       settings.speechVoiceURI === 'farsi-espeak-wasm' ||
-      settings.speechVoiceURI === 'farsi-custom' ||
       settings.speechVoiceURI === 'farsi-offline';
 
     const isFarsiContent = isFarsi || detectedLang === 'fa-IR';
@@ -676,8 +713,8 @@ class SpeechNarrationService {
     );
 
     const shouldUseFarsiOfflineTts =
-      isExplicitFarsiOfflineVoice ||
       (isFarsiContent && (
+        isExplicitFarsiOfflineVoice ||
         Boolean(settings.farsiTtsEngine) ||
         !hasSystemFarsiVoice ||
         (Boolean(settings.speechVoiceURI) && settings.speechVoiceURI.startsWith('farsi-'))
@@ -1001,17 +1038,24 @@ class SpeechNarrationService {
     }
 
     let engine: FarsiTtsEngineType = 'piper';
-    if (settings.speechVoiceURI === 'farsi-piper-neural') {
+    const isCustomEndpoint =
+      settings.speechVoiceURI === 'custom-endpoint' ||
+      settings.speechVoiceURI === 'farsi-custom' ||
+      settings.farsiTtsEngine === 'custom';
+
+    if (isCustomEndpoint) {
+      engine = 'custom';
+    } else if (settings.speechVoiceURI === 'farsi-piper-neural') {
       engine = 'piper';
     } else if (settings.speechVoiceURI === 'farsi-espeak-wasm') {
       engine = 'espeak';
-    } else if (settings.speechVoiceURI === 'farsi-custom') {
-      engine = 'custom';
     } else if (settings.farsiTtsEngine) {
       engine = settings.farsiTtsEngine;
     } else {
       engine = farsiOfflineTts.getActiveEngine();
     }
+
+    const isChunkFarsi = isRtlText(chunkText) || detectLanguageFromText(chunkText) === 'fa-IR';
 
     const currentWpm = getCurrentWpm ? getCurrentWpm() : settings.wpm;
     const wpmMultiplier = currentWpm / 160;
@@ -1027,12 +1071,15 @@ class SpeechNarrationService {
         speed: effectiveSpeed,
         pitch: effectivePitch,
         volume: effectiveVolume,
-        allowFallback: true,
+        allowFallback: isChunkFarsi, // Never fall back to eSpeak on non-Farsi text
       });
     } catch (err) {
-      console.warn('Farsi offline TTS synthesize error:', err);
+      console.warn('TTS synthesize error:', err);
       synthResult = {
         success: false,
+        wavBlob: new Blob([], { type: 'audio/wav' }),
+        durationMs: 0,
+        sampleRate: 0,
         engineUsed: engine,
         error: String(err),
       };

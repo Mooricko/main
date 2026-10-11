@@ -19,6 +19,7 @@ import { customTtsEngine } from './customTtsEngine';
 import { indexedDbModelStore } from './indexedDbModelStore';
 import { safeStorage } from '../../utils/safeStorage';
 import { loadCustomTtsConfig } from './customTtsConfig';
+import { isRtlText } from '../../utils/textParser';
 
 const STORAGE_KEY_ENGINE = 'adhd_reader_farsi_tts_engine';
 const STORAGE_KEY_SPEED = 'adhd_reader_farsi_tts_speed';
@@ -62,10 +63,6 @@ class FarsiOfflineTtsManager {
     if (typeof (piperEngine as any).resetForTesting === 'function') {
       (piperEngine as any).resetForTesting();
     }
-  }
-
-  public stopLocal(): void {
-    this.stop();
   }
 
   public handleStopMessage(): void {
@@ -269,12 +266,13 @@ class FarsiOfflineTtsManager {
         fallbackReason: reason,
       };
     } else if (engineType === 'custom') {
-      // User's own endpoint. Fall back to eSpeak unless the caller disabled fallback.
+      // User's own endpoint. Fall back to eSpeak only if text is Farsi and fallback is permitted.
       const customResult = await customTtsEngine.synthesize(text, options);
       if (customResult.success) {
         return customResult;
       }
-      if (options.allowFallback === false) {
+      const isFarsi = isRtlText(text);
+      if (options.allowFallback === false || !isFarsi) {
         return customResult;
       }
       const reason = customResult.error || 'Custom TTS endpoint failed';
@@ -514,9 +512,11 @@ class FarsiOfflineTtsManager {
     speed: number = 1.0,
     pitch: number = 1.0,
     volume: number = 1.0,
-    onFallback?: (msg: string) => void
+    onFallback?: (msg: string) => void,
+    sampleText?: string
   ): Promise<void> {
-    return this.speak(SAMPLE_FARSI_TEXT, {
+    const textToSpeak = sampleText || (engine === 'custom' ? 'Custom TTS endpoint active. Ready to focus and read.' : SAMPLE_FARSI_TEXT);
+    return this.speak(textToSpeak, {
       engine,
       speed,
       pitch,

@@ -106,15 +106,16 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
   }, []);
 
   const currentFarsiEngine = settings.farsiTtsEngine || farsiOfflineTts.getActiveEngine();
+  const [isCustomTesting, setIsCustomTesting] = useState(false);
 
   const handleSelectFarsiEngine = (engine: FarsiTtsEngineType) => {
     farsiOfflineTts.setEngine(engine);
-    const voiceURI = engine === 'piper' ? 'farsi-piper-neural' : (engine === 'espeak' ? 'farsi-espeak-wasm' : 'farsi-custom');
+    const voiceURI = engine === 'piper' ? 'farsi-piper-neural' : (engine === 'espeak' ? 'farsi-espeak-wasm' : 'custom-endpoint');
     onUpdateSettings({ farsiTtsEngine: engine, speechVoiceURI: voiceURI });
     if (engine === 'piper' && !piperCache.isOfflineReady) {
       setFarsiTtsNotice('⚠️ Piper neural model not yet cached. It will automatically fallback to eSpeak NG WASM until downloaded.');
     } else if (engine === 'custom') {
-      setFarsiTtsNotice('🔐 Custom endpoint selected. Configure it below, then test. Falls back to eSpeak NG on failure.');
+      setFarsiTtsNotice('🔐 Custom endpoint selected for all languages. Configure and test it below.');
     } else {
       setFarsiTtsNotice(null);
     }
@@ -125,10 +126,41 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
     if (result.valid === true) {
       setCustomConfig(result.config);
       setCustomKeyInput(result.config.apiKey);
-      setFarsiTtsNotice('✓ Custom TTS endpoint saved.');
-      setTimeout(() => setFarsiTtsNotice(null), 3000);
+      onUpdateSettings({ farsiTtsEngine: 'custom', speechVoiceURI: 'custom-endpoint' });
+      setFarsiTtsNotice('✓ Custom TTS endpoint saved and selected for all languages.');
+      setTimeout(() => setFarsiTtsNotice(null), 3500);
     } else {
       setFarsiTtsNotice(`⚠️ ${result.error}`);
+    }
+  };
+
+  const handleTestCustomEndpoint = async () => {
+    setIsCustomTesting(true);
+    setFarsiTtsNotice('⏳ Testing custom endpoint connection...');
+    try {
+      const result = await saveCustomTtsConfig({ ...customConfig, apiKey: customKeyInput.trim() });
+      if (result.valid === false) {
+        setFarsiTtsNotice(`⚠️ ${result.error}`);
+        setIsCustomTesting(false);
+        return;
+      }
+      setCustomConfig(result.config);
+      await farsiOfflineTts.preview(
+        'custom',
+        settings.farsiTtsSpeed || 1.0,
+        settings.speechPitch || 1.0,
+        settings.speechVolume,
+        (fallbackReason) => {
+          setFarsiTtsNotice(`ℹ️ Fallback notice: ${fallbackReason}`);
+        },
+        'Custom TTS endpoint connected successfully! Audio narration is active for all languages.'
+      );
+      setFarsiTtsNotice('✓ Custom TTS endpoint test succeeded!');
+      setTimeout(() => setFarsiTtsNotice(null), 4000);
+    } catch (err: any) {
+      setFarsiTtsNotice(`⚠️ Custom TTS error: ${err?.message || 'Connection failed'}`);
+    } finally {
+      setTimeout(() => setIsCustomTesting(false), 2600);
     }
   };
 
@@ -1109,11 +1141,14 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                     </div>
 
                     {(() => {
+                      const customVoices = availableVoices.filter(
+                        (v) => v.isCustom || v.voiceURI === 'custom-endpoint' || v.voiceURI === 'farsi-custom'
+                      );
                       const farsiVoices = availableVoices.filter(
-                        (v) => v.isFarsi || v.lang.startsWith('fa') || v.voiceURI.startsWith('farsi-')
+                        (v) => !v.isCustom && v.voiceURI !== 'custom-endpoint' && v.voiceURI !== 'farsi-custom' && (v.isFarsi || v.lang.startsWith('fa') || v.voiceURI.startsWith('farsi-'))
                       );
                       const otherVoices = availableVoices.filter(
-                        (v) => !v.isFarsi && !v.lang.startsWith('fa') && !v.voiceURI.startsWith('farsi-')
+                        (v) => !v.isCustom && v.voiceURI !== 'custom-endpoint' && v.voiceURI !== 'farsi-custom' && !v.isFarsi && !v.lang.startsWith('fa') && !v.voiceURI.startsWith('farsi-')
                       );
 
                       return (
@@ -1125,7 +1160,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                             const engine: FarsiTtsEngineType | undefined = 
                               val === 'farsi-piper-neural' ? 'piper' : 
                               val === 'farsi-espeak-wasm' ? 'espeak' : 
-                              val === 'farsi-custom' ? 'custom' : undefined;
+                              (val === 'custom-endpoint' || val === 'farsi-custom') ? 'custom' : undefined;
                             if (engine) {
                               farsiOfflineTts.setEngine(engine);
                               onUpdateSettings({ speechVoiceURI: val, farsiTtsEngine: engine });
@@ -1137,6 +1172,11 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                           className={`w-full p-2.5 rounded-xl border text-xs font-medium ${theme.borderClass} ${theme.inputBg} ${theme.textPrimary} focus:outline-none focus:border-red-500 transition-colors cursor-pointer`}
                         >
                           <option value="">Default System Voice (Auto-detect Language)</option>
+                          <optgroup label="🎙️ Custom Endpoint (OpenAI / BYO API - All Languages)">
+                            <option value="custom-endpoint">
+                              🎙️ Custom Endpoint (/v1/audio/speech - All Languages)
+                            </option>
+                          </optgroup>
                           {farsiVoices.length > 0 && (
                             <optgroup label="🇮🇷 Farsi / Persian Voices (گویندگان فارسی)">
                               {farsiVoices.map((v) => (
@@ -1315,15 +1355,22 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                     </div>
 
                     {/* Custom (BYO) Endpoint Configuration */}
-                    {currentFarsiEngine === 'custom' && (
-                      <div className="p-2.5 rounded-lg bg-black/30 border border-emerald-500/20 space-y-2">
-                        <div className="flex items-center justify-between text-[11px]">
-                          <span className="font-semibold text-slate-300 flex items-center gap-1.5">
-                            <Headphones className="w-3.5 h-3.5 text-emerald-400" />
-                            Custom TTS Endpoint (کلید خودت)
+                    {(currentFarsiEngine === 'custom' || settings.speechVoiceURI === 'custom-endpoint' || settings.speechVoiceURI === 'farsi-custom') && (
+                      <div className="p-3 rounded-xl bg-black/40 border border-emerald-500/30 space-y-2.5">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="font-bold text-emerald-300 flex items-center gap-1.5">
+                            <Headphones className="w-4 h-4 text-emerald-400" />
+                            Custom TTS Endpoint (All Languages / تمام زبان‌ها)
+                          </span>
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-mono">
+                            OpenAI API Compatible
                           </span>
                         </div>
+                        <p className={`text-[11px] ${theme.textMuted} leading-relaxed`}>
+                          OpenAI-compatible speech endpoint (/v1/audio/speech). Supports <strong>all languages</strong> (English, Farsi, etc.) in both RSVP and full-text flow.
+                        </p>
                         <div className="space-y-1.5">
+                          <label className="text-[10px] text-slate-400 font-medium">Base URL / Endpoint:</label>
                           <input
                             type="text"
                             value={customConfig.baseUrl}
@@ -1331,40 +1378,58 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                             placeholder="https://api.openai.com/v1"
                             className="w-full px-2.5 py-1.5 rounded-lg bg-black/40 border border-white/10 text-[11px] text-slate-200 focus:border-emerald-500/50 outline-none"
                           />
+                          <label className="text-[10px] text-slate-400 font-medium">API Key (Bearer token - optional for self-hosted):</label>
                           <input
                             type="password"
                             value={customKeyInput}
                             onChange={(e) => setCustomKeyInput(e.target.value)}
-                            placeholder="API key (Bearer)"
+                            placeholder="API key (Bearer token or sk-...)"
                             autoComplete="off"
                             className="w-full px-2.5 py-1.5 rounded-lg bg-black/40 border border-white/10 text-[11px] text-slate-200 focus:border-emerald-500/50 outline-none"
                           />
                           <div className="grid grid-cols-2 gap-1.5">
-                            <input
-                              type="text"
-                              value={customConfig.model}
-                              onChange={(e) => setCustomConfig((c) => ({ ...c, model: e.target.value }))}
-                              placeholder="model (e.g. tts-1)"
-                              className="w-full px-2.5 py-1.5 rounded-lg bg-black/40 border border-white/10 text-[11px] text-slate-200 focus:border-emerald-500/50 outline-none"
-                            />
-                            <input
-                              type="text"
-                              value={customConfig.voice}
-                              onChange={(e) => setCustomConfig((c) => ({ ...c, voice: e.target.value }))}
-                              placeholder="voice (e.g. alloy)"
-                              className="w-full px-2.5 py-1.5 rounded-lg bg-black/40 border border-white/10 text-[11px] text-slate-200 focus:border-emerald-500/50 outline-none"
-                            />
+                            <div>
+                              <label className="text-[10px] text-slate-400 font-medium">Model:</label>
+                              <input
+                                type="text"
+                                value={customConfig.model}
+                                onChange={(e) => setCustomConfig((c) => ({ ...c, model: e.target.value }))}
+                                placeholder="model (e.g. tts-1, kokoro)"
+                                className="w-full px-2.5 py-1.5 rounded-lg bg-black/40 border border-white/10 text-[11px] text-slate-200 focus:border-emerald-500/50 outline-none"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[10px] text-slate-400 font-medium">Voice Name:</label>
+                              <input
+                                type="text"
+                                value={customConfig.voice}
+                                onChange={(e) => setCustomConfig((c) => ({ ...c, voice: e.target.value }))}
+                                placeholder="voice (e.g. alloy, nova)"
+                                className="w-full px-2.5 py-1.5 rounded-lg bg-black/40 border border-white/10 text-[11px] text-slate-200 focus:border-emerald-500/50 outline-none"
+                              />
+                            </div>
                           </div>
                         </div>
-                        <div className="flex items-center gap-1.5 pt-1">
-                          <button
-                            type="button"
-                            onClick={handleSaveCustomConfig}
-                            className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold transition-colors cursor-pointer"
-                          >
-                            <Check className="w-3 h-3" />
-                            <span>ذخیره</span>
-                          </button>
+                        <div className="flex items-center justify-between pt-1">
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={handleSaveCustomConfig}
+                              className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold transition-colors cursor-pointer"
+                            >
+                              <Check className="w-3 h-3" />
+                              <span>ذخیره (Save)</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleTestCustomEndpoint}
+                              disabled={isCustomTesting}
+                              className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 text-[11px] font-bold transition-colors cursor-pointer"
+                            >
+                              <Play className="w-3 h-3 fill-current" />
+                              <span>{isCustomTesting ? 'در حال تست...' : 'تست اتصال (Test)'}</span>
+                            </button>
+                          </div>
                           <button
                             type="button"
                             onClick={handleClearCustomConfig}
@@ -1375,7 +1440,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                           </button>
                         </div>
                         <p className="text-[9px] text-slate-500 leading-snug">
-                          کلید فقط روی همین دستگاه ذخیره می‌شود و تنها برای درخواست به همان endpoint فرستاده می‌شود. متن شما هنگام استفاده از این موتور به سرور شما ارسال می‌شود.
+                          کلید و تنظیمات فقط روی همین دستگاه ذخیره می‌شوند. هنگام استفاده از این موتور، متن خوانش مستقیماً به آدرس سرور شما ارسال می‌شود.
                         </p>
                       </div>
                     )}

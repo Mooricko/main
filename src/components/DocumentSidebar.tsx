@@ -40,6 +40,30 @@ import { SAMPLE_TEXTS } from '../data/sampleTexts';
 import { isRtlText } from '../utils/textParser';
 import { documentStorageService } from '../services/document/documentStorageService';
 
+/**
+ * Formats a date to the required display format:
+ * "yyyy-mm-dd  hh:mm AM/PM"
+ */
+export function formatHistoryDate(dateInput?: string | number | Date): string {
+  if (!dateInput) return '';
+  const date = new Date(dateInput);
+  if (isNaN(date.getTime())) {
+    return String(dateInput);
+  }
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+
+  let hours = date.getHours();
+  const ampm = hours >= 12 ? 'PM' : 'AM';
+  hours = hours % 12;
+  hours = hours ? hours : 12;
+  const formattedHours = String(hours).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+
+  return `${year}-${month}-${day}  ${formattedHours}:${minutes} ${ampm}`;
+}
+
 interface DocumentSidebarProps {
   isOpen: boolean;
   onClose: () => void;
@@ -652,7 +676,7 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = ({
                         <p className="text-[11px] text-slate-400 mt-0.5 flex items-center gap-2">
                           <span>{doc.wordCount} words</span>
                           <span>•</span>
-                          <span>{doc.lastReadDate}</span>
+                          <span className="font-mono">{formatHistoryDate(doc.lastReadDate)}</span>
                         </p>
                       </div>
 

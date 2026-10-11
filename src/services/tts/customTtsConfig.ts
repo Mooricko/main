@@ -70,8 +70,9 @@ export function validateCustomTtsConfig(
   if (url.username || url.password) {
     return { valid: false, error: 'Do not embed credentials in the URL — use the API key field' };
   }
-  if (!apiKey && !isPrivateHost(url.hostname)) {
-    return { valid: false, error: 'API key is required for this endpoint' };
+  const isOpenAiHost = url.hostname === 'api.openai.com' || url.hostname.endsWith('.openai.com');
+  if (isOpenAiHost && !apiKey) {
+    return { valid: false, error: 'API key is required for OpenAI endpoint' };
   }
   if (/[\r\n]/.test(apiKey)) return { valid: false, error: 'API key contains invalid characters' };
   if (!model) return { valid: false, error: 'Model is required' };

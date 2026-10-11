@@ -184,6 +184,7 @@ setTimeout(async () => {
       success: true,
       wavBlob: new Blob([new Uint8Array(22050)], { type: 'audio/wav' }),
       durationMs: 250,
+      sampleRate: 22050,
       engineUsed: options?.engine || 'espeak',
     };
   };

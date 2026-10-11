@@ -131,4 +131,21 @@ describe('CustomTtsEngine', () => {
     assert.strictEqual(res.errorCategory, 'AUTH_FAILED');
     assert.ok(!(res.error || '').includes('sk-secret'), 'error must scrub the key');
   });
+
+  it('synthesizes English text for custom endpoint without Persian normalization', async () => {
+    const engine = new CustomTtsEngine();
+    engine.setConfigOverride({ baseUrl: 'https://api.example.com/v1', apiKey: 'sk-secret', model: 'tts-1', voice: 'alloy', format: 'wav' });
+
+    let capturedBody: any = null;
+    engine.setFetcherForTesting(async (url, init) => {
+      capturedBody = JSON.parse(String(init?.body || '{}'));
+      return new Response(wavBytes(), { status: 200, headers: { 'content-type': 'audio/wav' } });
+    });
+
+    const englishText = 'Traditional reading forces your eyes to make constant micro-jumps.';
+    const res = await engine.synthesize(englishText, {});
+    assert.strictEqual(res.success, true);
+    assert.strictEqual(res.engineUsed, 'custom');
+    assert.strictEqual(capturedBody.input, englishText);
+  });
 });

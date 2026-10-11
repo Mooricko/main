@@ -78,7 +78,7 @@ const DEFAULT_SETTINGS: ReaderSettings = {
   speechPitch: 1.0,
   speechVolume: 1.0,
   speechRateMultiplier: 1.0,
-  farsiTtsEngine: 'espeak',
+  farsiTtsEngine: 'piper',
   farsiTtsSpeed: 1.0,
   farsiTtsPitch: 1.0,
   doNotDisturb: false,
