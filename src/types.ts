@@ -61,6 +61,7 @@ export interface ReaderSettings {
   driftAnimation: boolean; // Subtle horizontal drift of active word to prevent fixed-point staring visual fatigue
   driftIntensity: 'subtle' | 'moderate' | 'dynamic'; // Intensity amplitude of horizontal drift
   fadingZoomEntrance?: boolean; // Subtle fading zoom entrance animation when a new word appears to lock eyes in center
+  showVerticalProgressRail?: boolean; // Vertical reading progress rail / minimap on the right edge of the screen
 }
 
 export interface SmartPaceAnalysis {

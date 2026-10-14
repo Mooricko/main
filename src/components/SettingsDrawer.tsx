@@ -823,6 +823,28 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
               />
             </div>
 
+            {/* Vertical Right-Edge Progress Rail */}
+            <div className="flex items-center justify-between p-3 rounded-xl border border-white/5 bg-black/10">
+              <div>
+                <div className={`text-xs font-semibold ${theme.textPrimary} flex items-center gap-1.5`}>
+                  <span>Vertical Right-Edge Progress Rail</span>
+                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-red-500/15 text-red-400 font-medium">
+                    RSVP Scrubber
+                  </span>
+                </div>
+                <div className={`text-[11px] ${theme.textMuted}`}>
+                  Interactive vertical timeline on the right screen edge for continuous spatial awareness
+                </div>
+              </div>
+              <input
+                id="toggle-vertical-progress-rail"
+                type="checkbox"
+                checked={settings.showVerticalProgressRail !== false}
+                onChange={(e) => onUpdateSettings({ showVerticalProgressRail: e.target.checked })}
+                className="w-4 h-4 rounded text-red-500 focus:ring-red-500 focus:ring-offset-0 cursor-pointer"
+              />
+            </div>
+
             {/* Drift Animation (Anti-Fatigue Saccadic Shift) */}
             <div className={`p-3.5 rounded-xl border transition-all ${
               settings.driftAnimation 

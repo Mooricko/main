@@ -7794,6 +7794,12 @@ var AdhdReaderTts = (() => {
   }
   async function playAudioBlob(blob, options = {}) {
     const volume = Math.max(0, Math.min(1, options.volume ?? 1));
+    if (typeof process !== "undefined" && process.versions?.node && typeof window === "undefined") {
+      options.onStart?.();
+      options.onEnd?.();
+      return { stop: () => {
+      } };
+    }
     if (typeof window !== "undefined" && typeof window.Audio !== "undefined" && typeof URL !== "undefined") {
       try {
         const url = URL.createObjectURL(blob);
@@ -7897,16 +7903,31 @@ var AdhdReaderTts = (() => {
       this.sampleRate = 22050;
       this.isCurrentlySpeaking = false;
       this.isInitialized = false;
+      this.isDisposed = false;
+      this.generation = 0;
       this.initPromise = null;
       this.cachedWasmBinary = null;
       this.currentPlaybackHandle = null;
     }
     /**
+     * Reset engine state cleanly for testing
+     */
+    resetForTesting() {
+      this.stop();
+      this.isDisposed = false;
+      this.generation++;
+      this.initPromise = null;
+      this.cachedWasmBinary = null;
+      this.isInitialized = false;
+    }
+    /**
      * Initializes the eSpeak NG WebAssembly environment and prefetches wasm assets
      */
     async initialize() {
+      if (this.isDisposed) throw new Error("eSpeak NG engine has been disposed");
       if (this.isInitialized) return;
       if (this.initPromise) return this.initPromise;
+      const currentGen = ++this.generation;
       this.initPromise = (async () => {
         try {
           const isNode2 = typeof process !== "undefined" && !!process.versions?.node;
@@ -7934,11 +7955,18 @@ var AdhdReaderTts = (() => {
               console.debug("Prefetching espeak-ng.wasm failed, falling back to dynamic locateFile:", fetchErr);
             }
           }
+          if (this.isDisposed || this.generation !== currentGen) {
+            return;
+          }
           await farsiPhonemizer.init();
+          if (this.isDisposed || this.generation !== currentGen) {
+            return;
+          }
           this.isInitialized = true;
           console.log("\u2713 Real eSpeak NG WASM Engine initialized successfully (voice: fa)");
         } catch (err) {
           console.error("Failed to initialize eSpeak NG WASM engine:", err);
+          this.isInitialized = false;
           throw err;
         } finally {
           this.initPromise = null;
@@ -8151,6 +8179,9 @@ var AdhdReaderTts = (() => {
      */
     dispose() {
       this.stop();
+      this.isDisposed = true;
+      this.generation++;
+      this.initPromise = null;
       this.cachedWasmBinary = null;
       this.isInitialized = false;
     }
@@ -8213,10 +8244,32 @@ var AdhdReaderTts = (() => {
         error: 'Model config invalid: phoneme_type missing or invalid (expected string e.g. "espeak" or "text")'
       };
     }
-    if (!config.phoneme_id_map || typeof config.phoneme_id_map !== "object" || Object.keys(config.phoneme_id_map).length === 0) {
+    if (!config.phoneme_id_map || typeof config.phoneme_id_map !== "object" || Array.isArray(config.phoneme_id_map)) {
+      return {
+        valid: false,
+        error: "Model config invalid: phoneme_id_map missing or invalid object"
+      };
+    }
+    const mapEntries = Object.entries(config.phoneme_id_map);
+    if (mapEntries.length === 0) {
       return {
         valid: false,
         error: "Model config invalid: phoneme_id_map missing or empty object"
+      };
+    }
+    const hasValidMapping = mapEntries.some(([_, val]) => {
+      if (typeof val === "number") {
+        return Number.isInteger(val) && val >= 0;
+      }
+      if (Array.isArray(val)) {
+        return val.length > 0 && val.every((v) => typeof v === "number" && Number.isInteger(v) && v >= 0);
+      }
+      return false;
+    });
+    if (!hasValidMapping) {
+      return {
+        valid: false,
+        error: "Model config invalid: phoneme_id_map contains invalid symbol mappings (expected integer IDs)"
       };
     }
     if (config.voice) {
@@ -8444,6 +8497,23 @@ var AdhdReaderTts = (() => {
       }
     }
     /**
+     * Internal helper to inspect raw record in IndexedDB without throwing
+     */
+    async getRawRecord(modelId = DEFAULT_PIPER_MODEL_NAME) {
+      try {
+        const db = await this.getDB();
+        return new Promise((resolve) => {
+          const tx = db.transaction(STORE_NAME, "readonly");
+          const store = tx.objectStore(STORE_NAME);
+          const req = store.get(modelId);
+          req.onsuccess = () => resolve(req.result || null);
+          req.onerror = () => resolve(null);
+        });
+      } catch {
+        return null;
+      }
+    }
+    /**
      * Save model and config to IndexedDB after strict validation
      */
     async saveModel(modelId, onnxBytes, configJson) {
@@ -8485,16 +8555,45 @@ var AdhdReaderTts = (() => {
             });
             resolve(true);
           };
-          req.onerror = () => reject(req.error);
+          req.onerror = () => {
+            this.currentStatus = "error";
+            this.errorCategory = "STORAGE_FAILED";
+            this.errorMessage = req.error?.message || "Failed to save Piper model to IndexedDB";
+            this.notify({
+              status: "error",
+              modelName: modelId,
+              sizeBytes: 0,
+              downloadProgress: 0,
+              errorMessage: this.errorMessage,
+              errorCategory: "STORAGE_FAILED",
+              cacheVersion: PIPER_CACHE_VERSION,
+              isOfflineReady: false
+            });
+            reject(req.error);
+          };
         });
       } catch (err) {
         console.error("Failed to save Piper model to IndexedDB:", err);
+        this.currentStatus = "error";
+        this.errorCategory = err?.message?.includes("parse") ? "PARSE_FAILED" : "STORAGE_FAILED";
+        this.errorMessage = err?.message || "Failed to save Piper model";
+        this.notify({
+          status: "error",
+          modelName: modelId,
+          sizeBytes: 0,
+          downloadProgress: 0,
+          errorMessage: this.errorMessage,
+          errorCategory: this.errorCategory,
+          cacheVersion: PIPER_CACHE_VERSION,
+          isOfflineReady: false
+        });
         return false;
       }
     }
     /**
      * Download model and persist in IndexedDB with real progress tracking.
      * Requires valid configuration and weights without silent fallbacks.
+     * Avoids unnecessarily redownloading 25MB ONNX file if verified valid weights already exist in storage.
      */
     async downloadAndCacheModel(onProgress) {
       this.currentStatus = "downloading";
@@ -8550,56 +8649,68 @@ var AdhdReaderTts = (() => {
           cacheVersion: PIPER_CACHE_VERSION,
           isOfflineReady: false
         });
-        const modelUrl = `${MODEL_BASE_URL}/${ONNX_FILENAME}`;
-        let modelRes;
+        let onnxBytes = null;
         try {
-          modelRes = await fetch(modelUrl);
-        } catch (netErr) {
-          const err = new Error(`download failed: network error fetching weights from ${modelUrl} (${netErr?.message})`);
-          err.category = "DOWNLOAD_FAILED";
-          throw err;
+          const existing = await this.getRawRecord(DEFAULT_PIPER_MODEL_NAME);
+          if (existing?.onnxBytes && validatePiperModelBytes(existing.onnxBytes).valid) {
+            onnxBytes = existing.onnxBytes;
+            console.log("[IndexedDbModelStore] Existing verified ONNX model weights found in storage; reusing existing weights.");
+            this.currentProgress = 85;
+            onProgress?.(85);
+          }
+        } catch {
         }
-        if (!modelRes.ok) {
-          const err = new Error(`download failed: HTTP ${modelRes.status} fetching weights from ${modelUrl}`);
-          err.category = "DOWNLOAD_FAILED";
-          throw err;
-        }
-        const contentLength = Number(modelRes.headers.get("content-length")) || 25 * 1024 * 1024;
-        const reader = modelRes.body?.getReader();
-        let onnxBytes;
-        if (!reader) {
-          onnxBytes = await modelRes.arrayBuffer();
-          this.currentProgress = 90;
-          onProgress?.(90);
-        } else {
-          const chunks = [];
-          let receivedBytes = 0;
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            if (value) {
-              chunks.push(value);
-              receivedBytes += value.length;
-              const pct = Math.min(90, Math.floor(15 + receivedBytes / contentLength * 75));
-              this.currentProgress = pct;
-              onProgress?.(pct);
-              this.notify({
-                status: "downloading",
-                modelName: DEFAULT_PIPER_MODEL_NAME,
-                sizeBytes: receivedBytes,
-                downloadProgress: pct,
-                cacheVersion: PIPER_CACHE_VERSION,
-                isOfflineReady: false
-              });
+        if (!onnxBytes) {
+          const modelUrl = `${MODEL_BASE_URL}/${ONNX_FILENAME}`;
+          let modelRes;
+          try {
+            modelRes = await fetch(modelUrl);
+          } catch (netErr) {
+            const err = new Error(`download failed: network error fetching weights from ${modelUrl} (${netErr?.message})`);
+            err.category = "DOWNLOAD_FAILED";
+            throw err;
+          }
+          if (!modelRes.ok) {
+            const err = new Error(`download failed: HTTP ${modelRes.status} fetching weights from ${modelUrl}`);
+            err.category = "DOWNLOAD_FAILED";
+            throw err;
+          }
+          const contentLength = Number(modelRes.headers.get("content-length")) || 25 * 1024 * 1024;
+          const reader = modelRes.body?.getReader();
+          if (!reader) {
+            onnxBytes = await modelRes.arrayBuffer();
+            this.currentProgress = 90;
+            onProgress?.(90);
+          } else {
+            const chunks = [];
+            let receivedBytes = 0;
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              if (value) {
+                chunks.push(value);
+                receivedBytes += value.length;
+                const pct = Math.min(90, Math.floor(15 + receivedBytes / contentLength * 75));
+                this.currentProgress = pct;
+                onProgress?.(pct);
+                this.notify({
+                  status: "downloading",
+                  modelName: DEFAULT_PIPER_MODEL_NAME,
+                  sizeBytes: receivedBytes,
+                  downloadProgress: pct,
+                  cacheVersion: PIPER_CACHE_VERSION,
+                  isOfflineReady: false
+                });
+              }
             }
+            const merged = new Uint8Array(receivedBytes);
+            let offset = 0;
+            for (const chunk of chunks) {
+              merged.set(chunk, offset);
+              offset += chunk.length;
+            }
+            onnxBytes = merged.buffer;
           }
-          const merged = new Uint8Array(receivedBytes);
-          let offset = 0;
-          for (const chunk of chunks) {
-            merged.set(chunk, offset);
-            offset += chunk.length;
-          }
-          onnxBytes = merged.buffer;
         }
         const bytesValidation = validatePiperModelBytes(onnxBytes);
         if (!bytesValidation.valid) {
@@ -8733,6 +8844,14 @@ var AdhdReaderTts = (() => {
         }
       }
     }
+    resetForTesting() {
+      this.stop();
+      this.session = null;
+      this.modelConfig = null;
+      this.initPromise = null;
+      this.lastInitError = null;
+      this.isCurrentlySpeaking = false;
+    }
     /**
      * Standard initialize method
      */
@@ -8742,8 +8861,8 @@ var AdhdReaderTts = (() => {
     /**
      * Initializes the ONNX session using model cached in IndexedDB
      */
-    async init() {
-      if (this.session) return true;
+    init() {
+      if (this.session) return Promise.resolve(true);
       if (this.initPromise) return this.initPromise;
       this.lastInitError = null;
       this.initPromise = (async () => {
@@ -9126,7 +9245,11 @@ var AdhdReaderTts = (() => {
   };
 
   // src/services/tts/customTtsConfig.ts
-  var CUSTOM_TTS_STORAGE_KEY = "adhd_reader_farsi_custom_tts_config";
+  var FARSI_CUSTOM_TTS_STORAGE_KEY = "adhd_reader_farsi_custom_tts_config";
+  var ENGLISH_CUSTOM_TTS_STORAGE_KEY = "adhd_reader_english_custom_tts_config";
+  function getStorageKeyForLanguage(lang = "farsi") {
+    return lang === "english" ? ENGLISH_CUSTOM_TTS_STORAGE_KEY : FARSI_CUSTOM_TTS_STORAGE_KEY;
+  }
   function hasChromeStorage() {
     return typeof chrome !== "undefined" && !!chrome.runtime?.id && !!chrome.storage?.local;
   }
@@ -9161,26 +9284,50 @@ var AdhdReaderTts = (() => {
     if (url.username || url.password) {
       return { valid: false, error: "Do not embed credentials in the URL \u2014 use the API key field" };
     }
-    if (!apiKey && !isPrivateHost(url.hostname)) {
-      return { valid: false, error: "API key is required for this endpoint" };
+    const isOpenAiHost = url.hostname === "api.openai.com" || url.hostname.endsWith(".openai.com");
+    if (isOpenAiHost && !apiKey) {
+      return { valid: false, error: "API key is required for OpenAI endpoint" };
     }
     if (/[\r\n]/.test(apiKey)) return { valid: false, error: "API key contains invalid characters" };
     if (!model) return { valid: false, error: "Model is required" };
     if (!voice) return { valid: false, error: "Voice is required" };
     return { valid: true, config: { baseUrl, apiKey, model, voice, format } };
   }
-  async function loadCustomTtsConfig() {
+  async function loadCustomTtsConfig(lang = "farsi") {
+    const key = getStorageKeyForLanguage(lang);
     try {
       if (hasChromeStorage()) {
-        const res = await chrome.storage.local.get([CUSTOM_TTS_STORAGE_KEY]);
-        const stored = res?.[CUSTOM_TTS_STORAGE_KEY];
+        const res = await chrome.storage.local.get([key, FARSI_CUSTOM_TTS_STORAGE_KEY]);
+        const stored = res?.[key] || (lang === "english" ? null : res?.[FARSI_CUSTOM_TTS_STORAGE_KEY]);
         return stored && typeof stored === "object" ? stored : null;
       }
-      const raw = safeStorage.getItem(CUSTOM_TTS_STORAGE_KEY);
-      return raw ? JSON.parse(raw) : null;
+      const raw = safeStorage.getItem(key);
+      if (raw) return JSON.parse(raw);
+      if (lang === "english") {
+        const fallbackRaw = safeStorage.getItem(FARSI_CUSTOM_TTS_STORAGE_KEY);
+        return fallbackRaw ? JSON.parse(fallbackRaw) : null;
+      }
+      return null;
     } catch {
       return null;
     }
+  }
+
+  // src/utils/textParser.ts
+  function isRtlText(text) {
+    if (!text) return false;
+    if (text.length <= 32) {
+      let hasRtlCandidate = false;
+      for (let i = 0; i < text.length; i++) {
+        if (text.charCodeAt(i) >= 1424) {
+          hasRtlCandidate = true;
+          break;
+        }
+      }
+      if (!hasRtlCandidate) return false;
+    }
+    const sample = text.length > 8e3 ? text.slice(0, 8e3) : text;
+    return /[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB1D-\uFB4F\uFB50-\uFDFF\uFE70-\uFEFF]/.test(sample);
   }
 
   // src/services/tts/customTtsEngine.ts
@@ -9188,7 +9335,11 @@ var AdhdReaderTts = (() => {
   var CUSTOM_TTS_MAX_CHARS = 4096;
   function buildSpeechUrl(baseUrl) {
     const trimmed = baseUrl.replace(/\/+$/, "");
-    return /\/audio\/speech$/.test(trimmed) ? trimmed : `${trimmed}/audio/speech`;
+    if (/\/audio\/speech$/.test(trimmed)) return trimmed;
+    if (/\/speech$/.test(trimmed) || /\/tts$/.test(trimmed) || /\/synthesize$/.test(trimmed)) {
+      return trimmed;
+    }
+    return `${trimmed}/audio/speech`;
   }
   function scrub(message, apiKey) {
     let out = message;
@@ -9232,12 +9383,17 @@ var AdhdReaderTts = (() => {
       };
     }
     async synthesize(text, options = {}) {
-      const stored = this.configOverride ?? await loadCustomTtsConfig();
-      if (!stored) return this.fail("Custom TTS is not configured", "NOT_CONFIGURED");
+      const isFarsi = isRtlText(text);
+      const targetLang = isFarsi ? "farsi" : "english";
+      let stored = this.configOverride ?? await loadCustomTtsConfig(targetLang);
+      if (!stored && !this.configOverride) {
+        stored = await loadCustomTtsConfig(targetLang === "farsi" ? "english" : "farsi");
+      }
+      if (!stored) return this.fail(`Custom TTS is not configured for ${isFarsi ? "Farsi" : "English"}`, "NOT_CONFIGURED");
       const validation = validateCustomTtsConfig(stored);
       if (validation.valid === false) return this.fail(validation.error, "INVALID_CONFIG");
       const cfg = validation.config;
-      const input = normalizePersianText(text) || text.trim();
+      const input = isRtlText(text) ? normalizePersianText(text) || text.trim() : text.trim();
       if (!input) {
         return { ...this.fail("", "EMPTY_AUDIO"), success: true, error: void 0, errorCategory: void 0 };
       }
@@ -9380,10 +9536,37 @@ var AdhdReaderTts = (() => {
       this.activeEngine = "espeak";
       this.currentPlayingId = 0;
       this.isSpeakingActive = false;
+      this.lifecycleState = "IDLE";
+      this.hasNotifiedStartForCurrent = false;
+      this.hasNotifiedEndForCurrent = false;
       this.activeCallbacks = null;
       this.listeners = /* @__PURE__ */ new Set();
       this.loadSavedSettings();
       this.setupExtensionMessageListener();
+    }
+    getLifecycleState() {
+      if (this.isSpeaking()) {
+        return this.lifecycleState === "IDLE" ? "PLAYING" : this.lifecycleState;
+      }
+      return "IDLE";
+    }
+    resetForTesting() {
+      this.stop();
+      this.currentPlayingId = 0;
+      this.isSpeakingActive = false;
+      this.lifecycleState = "IDLE";
+      this.hasNotifiedStartForCurrent = false;
+      this.hasNotifiedEndForCurrent = false;
+      this.activeCallbacks = null;
+      if (typeof espeakEngine.resetForTesting === "function") {
+        espeakEngine.resetForTesting();
+      }
+      if (typeof piperEngine.resetForTesting === "function") {
+        piperEngine.resetForTesting();
+      }
+    }
+    handleStopMessage() {
+      this.stop();
     }
     setupExtensionMessageListener() {
       if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) {
@@ -9408,20 +9591,32 @@ var AdhdReaderTts = (() => {
       }
       if (state === "STARTED" || state === "PLAYING") {
         this.isSpeakingActive = true;
-        this.activeCallbacks?.onStart?.({ durationMs: msg.durationMs });
+        this.lifecycleState = "PLAYING";
+        if (!this.hasNotifiedStartForCurrent) {
+          this.hasNotifiedStartForCurrent = true;
+          this.activeCallbacks?.onStart?.({ durationMs: msg.durationMs });
+        }
         this.notify();
       } else if (state === "ENDED") {
         this.isSpeakingActive = false;
+        this.lifecycleState = "IDLE";
         const cb = this.activeCallbacks;
         this.activeCallbacks = null;
-        cb?.onEnd?.();
+        if (!this.hasNotifiedEndForCurrent) {
+          this.hasNotifiedEndForCurrent = true;
+          cb?.onEnd?.();
+        }
         this.notify();
       } else if (state === "STOPPED") {
         this.isSpeakingActive = false;
+        this.lifecycleState = "IDLE";
+        this.hasNotifiedEndForCurrent = true;
         this.activeCallbacks = null;
         this.notify();
       } else if (state === "ERROR") {
         this.isSpeakingActive = false;
+        this.lifecycleState = "IDLE";
+        this.hasNotifiedEndForCurrent = true;
         const cb = this.activeCallbacks;
         this.activeCallbacks = null;
         cb?.onError?.(new Error(error || "Extension audio playback failed"));
@@ -9476,12 +9671,18 @@ var AdhdReaderTts = (() => {
      * True when executing inside the offscreen document itself. In that context the manager is driven
      * directly by offscreen.js, so it must NOT send runtime messages (which would loop back into it).
      */
-    isOffscreenContext() {
+    isOffscreenDocumentContext() {
+      if (typeof globalThis.__IS_OFFSCREEN_DOCUMENT__ !== "undefined") {
+        return Boolean(globalThis.__IS_OFFSCREEN_DOCUMENT__);
+      }
       try {
         return typeof window !== "undefined" && typeof window.location !== "undefined" && /offscreen\.html(\?|#|$)/.test(window.location.href);
       } catch {
         return false;
       }
+    }
+    isOffscreenContext() {
+      return this.isOffscreenDocumentContext();
     }
     sendExtensionMessage(payload) {
       if (!this.isExtensionContext() || this.isOffscreenContext()) {
@@ -9519,6 +9720,15 @@ var AdhdReaderTts = (() => {
         console.warn(`[FarsiOfflineTtsManager] Piper failed (${reason}). Explicitly falling back to eSpeak NG WASM.`);
         options.onFallback?.(reason);
         const fallbackResult = await espeakEngine.synthesize(text, options);
+        if (!fallbackResult.success) {
+          return {
+            ...fallbackResult,
+            engineUsed: "espeak",
+            fallbackTriggered: true,
+            fallbackReason: reason,
+            error: `Both Piper and eSpeak fallback failed: (Piper: ${reason}) (eSpeak: ${fallbackResult.error || "unknown"})`
+          };
+        }
         return {
           ...fallbackResult,
           engineUsed: "espeak",
@@ -9530,13 +9740,23 @@ var AdhdReaderTts = (() => {
         if (customResult.success) {
           return customResult;
         }
-        if (options.allowFallback === false) {
+        const isFarsi = isRtlText(text);
+        if (options.allowFallback === false || !isFarsi) {
           return customResult;
         }
         const reason = customResult.error || "Custom TTS endpoint failed";
         console.warn(`[FarsiOfflineTtsManager] Custom TTS failed (${reason}). Falling back to eSpeak NG WASM.`);
         options.onFallback?.(reason);
         const fallbackResult = await espeakEngine.synthesize(text, options);
+        if (!fallbackResult.success) {
+          return {
+            ...fallbackResult,
+            engineUsed: "espeak",
+            fallbackTriggered: true,
+            fallbackReason: reason,
+            error: `Both Custom and eSpeak fallback failed: (Custom: ${reason}) (eSpeak: ${fallbackResult.error || "unknown"})`
+          };
+        }
         return {
           ...fallbackResult,
           engineUsed: "espeak",
@@ -9555,6 +9775,7 @@ var AdhdReaderTts = (() => {
       this.stop();
       const playbackId = ++this.currentPlayingId;
       this.isSpeakingActive = true;
+      this.lifecycleState = "PLAYING";
       this.activeCallbacks = options;
       this.notify();
       const engineType = options.engine || this.activeEngine;
@@ -9601,6 +9822,7 @@ var AdhdReaderTts = (() => {
         onEnd: () => {
           if (this.currentPlayingId === playbackId) {
             this.isSpeakingActive = false;
+            this.lifecycleState = "IDLE";
             this.activeCallbacks = null;
             this.notify();
             options.onEnd?.();
@@ -9609,6 +9831,7 @@ var AdhdReaderTts = (() => {
         onError: (err) => {
           if (this.currentPlayingId === playbackId) {
             this.isSpeakingActive = false;
+            this.lifecycleState = "IDLE";
             this.activeCallbacks = null;
             this.notify();
             options.onError?.(err);
@@ -9618,34 +9841,50 @@ var AdhdReaderTts = (() => {
           options.onFallback?.(reason);
         }
       };
-      const synthResult = await this.synthesize(text, options);
-      if (this.currentPlayingId !== playbackId) {
-        return;
+      try {
+        const synthResult = await this.synthesize(text, options);
+        if (this.currentPlayingId !== playbackId) {
+          return;
+        }
+        if (!synthResult.success || !synthResult.wavBlob) {
+          this.isSpeakingActive = false;
+          this.lifecycleState = "IDLE";
+          this.activeCallbacks = null;
+          this.notify();
+          options.onError?.(new Error(synthResult.error || "Speech synthesis failed"));
+          return;
+        }
+        if (synthResult.fallbackTriggered && synthResult.fallbackReason) {
+          options.onFallback?.(synthResult.fallbackReason);
+        }
+        const activeEngineInstance = synthResult.engineUsed === "piper" ? piperEngine : synthResult.engineUsed === "custom" ? customTtsEngine : espeakEngine;
+        await activeEngineInstance.playWavBlob(synthResult.wavBlob, wrappedOptions);
+      } catch (err) {
+        if (this.currentPlayingId === playbackId) {
+          this.isSpeakingActive = false;
+          this.lifecycleState = "IDLE";
+          this.activeCallbacks = null;
+          this.notify();
+          options.onError?.(err);
+        }
       }
-      if (!synthResult.success || !synthResult.wavBlob) {
-        this.isSpeakingActive = false;
-        this.activeCallbacks = null;
-        this.notify();
-        options.onError?.(new Error(synthResult.error || "Speech synthesis failed"));
-        return;
-      }
-      if (synthResult.fallbackTriggered && synthResult.fallbackReason) {
-        options.onFallback?.(synthResult.fallbackReason);
-      }
-      const activeEngineInstance = synthResult.engineUsed === "piper" ? piperEngine : synthResult.engineUsed === "custom" ? customTtsEngine : espeakEngine;
-      await activeEngineInstance.playWavBlob(synthResult.wavBlob, wrappedOptions);
+    }
+    stopLocal() {
+      this.currentPlayingId++;
+      this.isSpeakingActive = false;
+      this.lifecycleState = "IDLE";
+      this.activeCallbacks = null;
+      espeakEngine.stop();
+      piperEngine.stop();
+      customTtsEngine.stop();
+      this.notify();
     }
     /**
      * Immediately stops any active audio playback
      */
     stop() {
-      this.currentPlayingId++;
-      this.isSpeakingActive = false;
-      this.activeCallbacks = null;
-      espeakEngine.stop();
-      piperEngine.stop();
-      customTtsEngine.stop();
-      if (this.isExtensionContext()) {
+      this.stopLocal();
+      if (this.isExtensionContext() && !this.isOffscreenDocumentContext()) {
         this.sendExtensionMessage({
           action: "STOP",
           type: "STOP",
@@ -9653,7 +9892,6 @@ var AdhdReaderTts = (() => {
         }).catch(() => {
         });
       }
-      this.notify();
     }
     /**
      * Standard status query matching canonical extension contract (GET_STATUS)
@@ -9703,8 +9941,9 @@ var AdhdReaderTts = (() => {
     /**
      * Quick preview test
      */
-    async preview(engine = this.activeEngine, speed = 1, pitch = 1, volume = 1, onFallback) {
-      return this.speak(SAMPLE_FARSI_TEXT, {
+    async preview(engine = this.activeEngine, speed = 1, pitch = 1, volume = 1, onFallback, sampleText) {
+      const textToSpeak = sampleText || (engine === "custom" ? "Custom TTS endpoint active. Ready to focus and read." : SAMPLE_FARSI_TEXT);
+      return this.speak(textToSpeak, {
         engine,
         speed,
         pitch,

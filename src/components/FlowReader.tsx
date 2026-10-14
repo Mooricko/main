@@ -22,8 +22,9 @@ import { MarkerHighlight } from './MarkerHighlight';
 import { ReadingHeatmapProgress } from './ReadingHeatmapProgress';
 import { LayoutGroup } from 'motion/react';
 import { measureDevTiming } from '../utils/performanceDiagnostics';
+import { ChapterScrubber, Chapter } from './ChapterScrubber';
 
-import { ReaderDocumentHandle, ParagraphIndexEntry } from '../types';
+import { ReaderDocumentHandle, ParagraphIndexEntry, DocumentStructure } from '../types';
 
 interface FlowReaderProps {
   words: HighlightedWordParts[];
@@ -134,24 +135,29 @@ export const FlowReader: React.FC<FlowReaderProps> = ({
 
   // Document-level natural paragraph structure loaded from handle (double newline pre-processing)
   const [docParagraphs, setDocParagraphs] = useState<ParagraphIndexEntry[] | null>(null);
+  const [docStructure, setDocStructure] = useState<DocumentStructure | null>(null);
 
   useEffect(() => {
     let isCancelled = false;
     if (!handle) {
       setDocParagraphs(null);
+      setDocStructure(null);
       return;
     }
 
-    // Pre-process document structure to detect natural double-newline breaks
+    // Pre-process document structure to detect natural double-newline breaks & outline chapters
     handle
       .getStructure()
       .then((structure) => {
-        if (!isCancelled && structure?.paragraphs && structure.paragraphs.length > 0) {
-          setDocParagraphs(structure.paragraphs);
+        if (!isCancelled && structure) {
+          setDocStructure(structure);
+          if (structure?.paragraphs && structure.paragraphs.length > 0) {
+            setDocParagraphs(structure.paragraphs);
+          }
         }
       })
       .catch((err) => {
-        console.warn('[FlowReader] Failed to load document paragraph structure:', err);
+        console.warn('[FlowReader] Failed to load document structure:', err);
       });
 
     return () => {
@@ -335,6 +341,99 @@ export const FlowReader: React.FC<FlowReaderProps> = ({
   }, [paragraphGroups, currentIndex]);
 
   const activeParagraphIndex = activeGroup?.paragraphIndex ?? 0;
+
+  // Generate structured chapters/sections for the vertical ChapterScrubber
+  const scrubberChapters = useMemo<Chapter[]>(() => {
+    if (!words || words.length === 0) return [];
+
+    // Strategy 1: Formal outline chapters (e.g. from PDF, EPUB, or Markdown)
+    if (docStructure?.chapters && docStructure.chapters.length >= 2) {
+      return docStructure.chapters.map((ch, idx) => {
+        const startW = Math.max(0, Math.min(words.length - 1, ch.startWordIndex));
+        const endW = Math.max(startW, Math.min(words.length - 1, ch.endWordIndex));
+        const previewText = words
+          .slice(startW, Math.min(startW + 24, words.length))
+          .map((w) => w.original)
+          .join(' ');
+
+        return {
+          id: ch.id || `chap-${idx}`,
+          title: ch.title || `Chapter ${idx + 1}`,
+          meta: ch.pageStart ? `Page ${ch.pageStart}` : `Chapter ${idx + 1} · ${endW - startW + 1} words`,
+          description: previewText,
+          startWordIndex: startW,
+          endWordIndex: endW,
+        };
+      });
+    }
+
+    // Strategy 2: Natural paragraph blocks
+    if (paragraphGroups && paragraphGroups.length >= 2) {
+      return paragraphGroups.map((group) => {
+        const startW = group.words[0]?.globalIndex ?? 0;
+        const endW = group.words[group.words.length - 1]?.globalIndex ?? startW;
+        const firstWords = group.words.slice(0, 6).map((w) => w.word.original).join(' ');
+        const preview = group.words.slice(0, 24).map((w) => w.word.original).join(' ');
+
+        return {
+          id: `para-${group.paragraphIndex}`,
+          title: firstWords ? `${firstWords}...` : `Paragraph ${group.paragraphIndex + 1}`,
+          meta: `Paragraph ${group.paragraphIndex + 1} · ${group.words.length} words`,
+          description: preview,
+          startWordIndex: startW,
+          endWordIndex: endW,
+        };
+      });
+    }
+
+    // Strategy 3: Paced reading milestones (every ~50-80 words)
+    const count = Math.min(10, Math.max(3, Math.ceil(words.length / 50)));
+    const step = Math.max(1, Math.floor(words.length / count));
+    const items: Chapter[] = [];
+    for (let i = 0; i < words.length; i += step) {
+      const end = Math.min(words.length - 1, i + step - 1);
+      const preview = words.slice(i, Math.min(i + 20, words.length)).map((w) => w.original).join(' ');
+      const pct = Math.round((i / words.length) * 100);
+      items.push({
+        id: `section-${i}`,
+        title: `Section ${items.length + 1} (${pct}%)`,
+        meta: `Word ${i + 1} - ${end + 1}`,
+        description: preview,
+        startWordIndex: i,
+        endWordIndex: end,
+      });
+    }
+    return items;
+  }, [words, docStructure, paragraphGroups]);
+
+  // Current active chapter index in the scrubber
+  const currentScrubberIndex = useMemo(() => {
+    if (!scrubberChapters || scrubberChapters.length === 0) return 0;
+    const foundIdx = scrubberChapters.findIndex(
+      (c) => currentIndex >= (c.startWordIndex ?? 0) && currentIndex <= (c.endWordIndex ?? Infinity)
+    );
+    return foundIdx >= 0 ? foundIdx : 0;
+  }, [scrubberChapters, currentIndex]);
+
+  // Handle selecting a chapter from the scrubber
+  const handleScrubberSelect = useCallback(
+    (chapter: Chapter) => {
+      if (chapter.startWordIndex !== undefined) {
+        onIndexChange(chapter.startWordIndex);
+        const targetWord = chapter.startWordIndex;
+        const targetGroup = paragraphGroups.find((g) =>
+          g.words.some((w) => w.globalIndex === targetWord)
+        );
+        if (targetGroup && paragraphRefs.current[targetGroup.paragraphIndex]) {
+          paragraphRefs.current[targetGroup.paragraphIndex]?.scrollIntoView({
+            behavior: 'smooth',
+            block: 'center',
+          });
+        }
+      }
+    },
+    [onIndexChange, paragraphGroups]
+  );
   const activeWord =
     words.find((w) => w && w.index === currentIndex) ||
     (words[currentIndex] &&
@@ -527,11 +626,16 @@ export const FlowReader: React.FC<FlowReaderProps> = ({
 
   const isTextRtl = words.length > 0 && Boolean(words[0]?.isRtl || words.some((w) => w?.isRtl));
 
+  const scrubberRowHeight = useMemo(() => {
+    if (!scrubberChapters || scrubberChapters.length === 0) return 10;
+    return Math.max(5, Math.min(12, Math.floor(440 / Math.max(1, scrubberChapters.length))));
+  }, [scrubberChapters]);
+
   return (
-    <div className="flex flex-col flex-1 w-full max-w-4xl mx-auto px-4 py-3 sm:py-4 justify-between h-full min-h-0 overflow-hidden relative select-none">
-      {/* Top Controls & Meta (with 5-second mouse idle fade-out) */}
+    <div className="flex flex-col flex-1 w-full mx-auto px-4 sm:px-6 py-3 sm:py-4 justify-between h-full min-h-0 relative select-none">
+      {/* Top Status & Context Info */}
       <div 
-        className={`flex flex-wrap items-center justify-between gap-3 text-xs mb-3 transition-all duration-700 ease-out shrink-0 z-20 ${
+        className={`flex items-center justify-between gap-3 text-xs mb-3 transition-all duration-700 ease-out shrink-0 z-20 max-w-3xl mx-auto w-full ${
           isIdle ? 'opacity-0 -translate-y-4 pointer-events-none' : 'opacity-100 translate-y-0'
         }`}
       >
@@ -544,88 +648,133 @@ export const FlowReader: React.FC<FlowReaderProps> = ({
             <span>{formattedTimeRemaining} left</span>
           </span>
         </div>
+      </div>
 
-        <div className="flex items-center gap-2">
-          {/* Word Size Controller (Matching RSVP Mode) */}
-          <div className={`flex items-center rounded-lg border ${theme.borderClass} ${theme.cardBgClass} p-0.5 text-xs font-mono`}>
-            <button
-              id="flow-font-decrease-btn"
-              type="button"
-              onClick={() => onUpdateSettings({ flowFontSize: Math.max(14, (settings.flowFontSize || 22) - 2) })}
-              title="Decrease word size (-)"
-              aria-label="Decrease word size (-)"
-              className={`px-2 py-0.5 rounded font-semibold ${theme.textMuted} hover:${theme.textPrimary} hover:${theme.accentSurface} transition-colors`}
-            >
-              A-
-            </button>
-            <span className={`px-1.5 font-bold ${theme.textPrimary}`}>
-              {settings.flowFontSize || 22}px
-            </span>
-            <button
-              id="flow-font-increase-btn"
-              type="button"
-              onClick={() => onUpdateSettings({ flowFontSize: Math.min(52, (settings.flowFontSize || 22) + 2) })}
-              title="Increase word size (+)"
-              aria-label="Increase word size (+)"
-              className={`px-2 py-0.5 rounded font-semibold ${theme.textMuted} hover:${theme.textPrimary} hover:${theme.accentSurface} transition-colors`}
-            >
-              A+
-            </button>
-          </div>
+      {/* Chapter Scrubber Rail (Aligned directly to the middle of the text body) */}
+      {scrubberChapters.length > 1 && (
+        <aside
+          id="flow-chapter-scrubber-rail"
+          aria-label="Chapter and reading progress scrubber"
+          className={`fixed top-1/2 -translate-y-1/2 z-40 flex items-center justify-center transition-all duration-500 ease-out pointer-events-auto ${
+            isIdle ? 'opacity-30 hover:opacity-100' : 'opacity-100'
+          }`}
+          style={{
+            left: isTextRtl ? undefined : `max(8px, calc(50% - 24rem - 58px))`,
+            right: isTextRtl ? `max(8px, calc(50% - 24rem - 58px))` : undefined,
+          }}
+        >
+          <ChapterScrubber
+            chapters={scrubberChapters}
+            currentIndex={currentScrubberIndex}
+            onSelect={handleScrubberSelect}
+            side={isTextRtl ? 'right' : 'left'}
+            dir={isTextRtl ? 'rtl' : 'ltr'}
+            disableAutoFlip={true}
+            rowHeight={scrubberRowHeight}
+            peakLength={48}
+            restLength={14}
+            radius={4}
+            highlightHex={highlight.hex}
+            className="py-2"
+          />
+        </aside>
+      )}
 
-          {/* Paragraph Blur Focus Toggle (Item 3) */}
+      {/* Right Edge Vertical Toolbar */}
+      <aside 
+        id="flow-right-edge-toolbar"
+        aria-label="Flow quick controls"
+        className={`fixed right-2 sm:right-3.5 top-1/2 -translate-y-1/2 z-30 flex flex-col items-center gap-2 p-1.5 rounded-2xl border ${theme.borderClass} ${theme.cardBgClass} backdrop-blur-md shadow-2xl transition-all duration-500 ease-out max-h-[calc(100vh-80px)] overflow-y-auto ${
+          isIdle ? 'opacity-0 translate-x-4 pointer-events-none' : 'opacity-100 translate-x-0'
+        }`}
+      >
+        {/* Word Size Controller (Vertical A+ / Size / A-) */}
+        <div 
+          id="flow-font-size-control-vertical"
+          className={`flex flex-col items-center rounded-xl border ${theme.borderClass} ${theme.cardBgClass} p-1 text-xs font-mono shadow-xs w-11`}
+          title={`Full text word size: ${settings.flowFontSize || 22}px`}
+        >
           <button
-            id="toggle-paragraph-blur-btn"
+            id="flow-font-increase-btn"
             type="button"
-            onClick={() => onUpdateSettings({ focusParagraphBlur: !settings.focusParagraphBlur })}
-            title={
-              settings.focusParagraphBlur
-                ? 'Paragraph Focus Blur: ON (Only active or hovered paragraph is unblurred)'
-                : 'Paragraph Focus Blur: OFF (Click to focus on one paragraph at a time)'
-            }
-            aria-label="Toggle Paragraph Blur Focus"
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-medium transition-all ${
-              settings.focusParagraphBlur
-                ? 'font-bold shadow-xs'
-                : `${theme.borderClass} ${theme.textMuted} hover:${theme.textPrimary} hover:${theme.accentSurface}`
-            }`}
-            style={
-              settings.focusParagraphBlur
-                ? {
-                    borderColor: `${highlight.hex}80`,
-                    color: highlight.hex,
-                    backgroundColor: `${highlight.hex}18`,
-                  }
-                : undefined
-            }
+            onClick={() => onUpdateSettings({ flowFontSize: Math.min(52, (settings.flowFontSize || 22) + 2) })}
+            title="Increase word size (+)"
+            aria-label="Increase word size (+)"
+            className={`w-full py-1 rounded-lg font-bold text-xs flex items-center justify-center ${theme.textMuted} hover:${theme.textPrimary} hover:${theme.accentSurface} transition-colors cursor-pointer`}
           >
-            <Focus className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Paragraph Focus</span>
-            <span className={`text-[10px] px-1 py-0.2 rounded font-mono font-bold ${
-              settings.focusParagraphBlur ? 'bg-red-500/20 text-red-400' : 'bg-white/10'
-            }`}>
-              {settings.focusParagraphBlur ? 'ON' : 'OFF'}
-            </span>
+            <span className="text-[11px] font-bold">A+</span>
           </button>
-
-          {/* Switch to RSVP View Button */}
+          <span className={`py-0.5 text-[10px] font-mono font-bold ${theme.textPrimary}`}>
+            {settings.flowFontSize || 22}
+          </span>
           <button
-            id="flow-switch-to-rsvp-btn"
+            id="flow-font-decrease-btn"
             type="button"
-            onClick={onSwitchToRsvp}
-            className={`flex items-center gap-1.5 px-3 py-1 rounded-lg border ${theme.borderClass} ${theme.textPrimary} hover:${theme.accentSurface} transition-colors font-medium`}
+            onClick={() => onUpdateSettings({ flowFontSize: Math.max(14, (settings.flowFontSize || 22) - 2) })}
+            title="Decrease word size (-)"
+            aria-label="Decrease word size (-)"
+            className={`w-full py-1 rounded-lg font-bold text-xs flex items-center justify-center ${theme.textMuted} hover:${theme.textPrimary} hover:${theme.accentSurface} transition-colors cursor-pointer`}
           >
-            <Eye className="w-3.5 h-3.5 text-red-500" />
-            <span className="hidden sm:inline">Switch to RSVP</span>
+            <span className="text-[11px] font-bold">A-</span>
           </button>
         </div>
-      </div>
+
+        {/* Paragraph Blur Focus Toggle (Vertical) */}
+        <button
+          id="toggle-paragraph-blur-btn"
+          type="button"
+          onClick={() => onUpdateSettings({ focusParagraphBlur: !settings.focusParagraphBlur })}
+          title={
+            settings.focusParagraphBlur
+              ? 'Paragraph Focus Blur: ON (Only active or hovered paragraph is unblurred)'
+              : 'Paragraph Focus Blur: OFF (Click to focus on one paragraph at a time)'
+          }
+          aria-label="Toggle Paragraph Blur Focus"
+          className={`flex flex-col items-center justify-center p-2 rounded-xl border text-xs transition-all shadow-xs w-11 cursor-pointer ${
+            settings.focusParagraphBlur
+              ? 'font-bold'
+              : `${theme.borderClass} ${theme.cardBgClass} ${theme.textMuted} hover:${theme.textPrimary} hover:${theme.accentSurface}`
+          }`}
+          style={
+            settings.focusParagraphBlur
+              ? {
+                  borderColor: `${highlight.hex}80`,
+                  color: highlight.hex,
+                  backgroundColor: `${highlight.hex}18`,
+                }
+              : undefined
+          }
+        >
+          <Focus className="w-4 h-4" />
+          <span className="text-[8px] font-semibold mt-0.5">Focus</span>
+          <span className={`text-[8px] px-1 py-0.2 rounded font-mono font-bold mt-0.5 ${
+            settings.focusParagraphBlur ? 'bg-red-500/20 text-red-400' : 'bg-white/10'
+          }`}>
+            {settings.focusParagraphBlur ? 'ON' : 'OFF'}
+          </span>
+        </button>
+
+        {/* Switch to RSVP View Button (Vertical) */}
+        <button
+          id="flow-switch-to-rsvp-btn"
+          type="button"
+          onClick={onSwitchToRsvp}
+          title="Switch to Rapid Serial Visual Presentation (RSVP) Mode"
+          aria-label="Switch to RSVP Mode"
+          className={`flex flex-col items-center justify-center p-2 rounded-xl border ${theme.borderClass} ${theme.cardBgClass} ${theme.textPrimary} hover:${theme.accentSurface} transition-colors shadow-xs w-11 cursor-pointer`}
+        >
+          <Eye className="w-4 h-4 text-red-500" />
+          <span className="text-[8px] font-semibold mt-0.5">RSVP</span>
+        </button>
+      </aside>
 
       {/* Main Reading Stage & Text Scroll Container (Item 1 & Item 5: Locked player panel, text itself scrolls on RSVP background) */}
       <div 
         ref={containerRef}
         id="flow-text-container"
-        className={`flex-1 min-h-0 overflow-y-auto px-2 sm:px-6 py-4 sm:py-8 select-text leading-relaxed relative ${font.className} scroll-smooth`}
+        className={`flex-1 min-h-0 overflow-y-auto no-scrollbar py-4 sm:py-8 select-text leading-relaxed relative ${font.className} scroll-smooth ${
+          isTextRtl ? 'pr-12 sm:pr-16 pl-4 sm:pl-6' : 'pl-12 sm:pl-16 pr-12 sm:pr-16'
+        }`}
         style={{
           fontSize: `${settings.flowFontSize || 22}px`,
           lineHeight: settings.lineHeight || 1.8,

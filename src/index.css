@@ -50,6 +50,15 @@
   background: rgba(148, 163, 184, 0.4);
 }
 
+/* Hide scrollbar for elements with ChapterScrubber */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
 /* Optical Reticle Center Line Glow */
 .reticle-line {
   position: relative;

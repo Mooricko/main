@@ -17,7 +17,8 @@ import {
   VolumeX,
   Headphones,
   Flame,
-  MoveHorizontal
+  MoveHorizontal,
+  AlignLeft
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { HighlightedWordParts, ReaderSettings, ReadingHeatmapData, WarmupStatus } from '../types';
@@ -33,7 +34,7 @@ import { MetallicButton } from './MetallicButton';
 import { ReadingHeatmapProgress } from './ReadingHeatmapProgress';
 import { AutoPauseReason } from '../hooks/useSmartAutoPause';
 
-import { ReaderDocumentHandle } from '../types';
+import { ReaderDocumentHandle, DocumentStructure } from '../types';
 
 interface RSVPReaderProps {
   words: HighlightedWordParts[];
@@ -58,6 +59,7 @@ interface RSVPReaderProps {
   onWordStep?: () => void;
   onSkipWarmup?: () => void;
   onResetWarmup?: () => void;
+  onSwitchToFlow?: () => void;
 }
 
 export const RSVPReader: React.FC<RSVPReaderProps> = ({
@@ -83,6 +85,7 @@ export const RSVPReader: React.FC<RSVPReaderProps> = ({
   onWordStep,
   onSkipWarmup,
   onResetWarmup,
+  onSwitchToFlow,
 }) => {
   const theme = THEME_CONFIGS[settings.theme];
   const highlight = HIGHLIGHT_COLORS[settings.highlightColor];
@@ -92,6 +95,29 @@ export const RSVPReader: React.FC<RSVPReaderProps> = ({
 
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const [hasFinished, setHasFinished] = useState(false);
+  const [docStructure, setDocStructure] = useState<DocumentStructure | null>(null);
+
+  useEffect(() => {
+    let isCancelled = false;
+    if (!_handle) {
+      setDocStructure(null);
+      return;
+    }
+    _handle
+      .getStructure()
+      .then((structure) => {
+        if (!isCancelled && structure) {
+          setDocStructure(structure);
+        }
+      })
+      .catch((err) => {
+        console.warn('[RSVPReader] Failed to load document structure:', err);
+      });
+    return () => {
+      isCancelled = true;
+    };
+  }, [_handle]);
+
   const isPlayingRef = useRef(isPlaying);
   const currentIndexRef = useRef(currentIndex);
   const settingsRef = useRef(settings);
@@ -433,8 +459,10 @@ export const RSVPReader: React.FC<RSVPReaderProps> = ({
   const remainingSecs = secondsRemaining % 60;
   const formattedTimeRemaining = remainingMins > 0 ? `${remainingMins}m ${remainingSecs}s` : `${remainingSecs}s`;
 
+  const isTextRtl = words.length > 0 && Boolean(words[0]?.isRtl || words.some((w) => w?.isRtl));
+
   return (
-    <div className="flex flex-col flex-1 w-full max-w-5xl mx-auto px-4 py-3 sm:py-6 justify-between select-none min-h-0 overflow-hidden relative">
+    <div className="flex flex-col flex-1 w-full max-w-5xl mx-auto px-4 sm:px-6 py-3 sm:py-6 justify-between select-none min-h-0 overflow-hidden relative">
       {/* Top Status & Context Info */}
       <div 
         className={`flex items-center justify-between gap-3 text-xs transition-all duration-700 ease-out shrink-0 z-20 ${
@@ -450,181 +478,210 @@ export const RSVPReader: React.FC<RSVPReaderProps> = ({
             <span>{formattedTimeRemaining} left</span>
           </span>
         </div>
-
-        {/* Word Size, Words per flash, Smart Pace & Speed */}
-        <div className="flex items-center gap-2">
-          {/* Words per Flash (1, 3, 5 words in RSVP mode) */}
-          <div 
-            id="rsvp-word-count-selector"
-            className={`flex items-center rounded-lg border ${theme.borderClass} ${theme.cardBgClass} p-0.5 text-xs font-mono`}
-            title="RSVP Words shown per flash: 1, 3, or 5 words"
-          >
-            {([1, 3, 5] as const).map((count) => {
-              const isSelected = (settings.chunkSize || 1) === count;
-              return (
-                <button
-                  key={count}
-                  type="button"
-                  onClick={() => onUpdateSettings({ chunkSize: count })}
-                  title={`Show ${count} ${count === 1 ? 'word' : 'words'} per flash`}
-                  aria-label={`Show ${count} words per flash`}
-                  className={`px-2 py-0.5 rounded font-bold transition-all ${
-                    isSelected
-                      ? 'text-white shadow-xs'
-                      : `${theme.textMuted} hover:${theme.textPrimary}`
-                  }`}
-                  style={isSelected ? { backgroundColor: highlight.hex } : undefined}
-                >
-                  {count}w
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Word Size Controller */}
-          <div className={`flex items-center rounded-lg border ${theme.borderClass} ${theme.cardBgClass} p-0.5 text-xs font-mono`}>
-            <button
-              id="rsvp-font-decrease-btn"
-              type="button"
-              onClick={() => onUpdateSettings({ fontSize: Math.max(28, settings.fontSize - 4) })}
-              title="Decrease word size (-)"
-              aria-label="Decrease word size (-)"
-              className={`px-2 py-0.5 rounded font-semibold ${theme.textMuted} hover:${theme.textPrimary} hover:${theme.accentSurface} transition-colors`}
-            >
-              A-
-            </button>
-            <span className={`px-1.5 font-bold ${theme.textPrimary}`}>
-              {settings.fontSize}px
-            </span>
-            <button
-              id="rsvp-font-increase-btn"
-              type="button"
-              onClick={() => onUpdateSettings({ fontSize: Math.min(100, settings.fontSize + 4) })}
-              title="Increase word size (+)"
-              aria-label="Increase word size (+)"
-              className={`px-2 py-0.5 rounded font-semibold ${theme.textMuted} hover:${theme.textPrimary} hover:${theme.accentSurface} transition-colors`}
-            >
-              A+
-            </button>
-          </div>
-
-          {/* Smart Pace Quick Toggle */}
-          <button
-            id="toggle-smart-pace-btn"
-            type="button"
-            onClick={() => onUpdateSettings({ smartPace: !settings.smartPace })}
-            title={
-              settings.smartPace
-                ? 'Smart Pace: ON (Dynamically adapts speed to word complexity & length)'
-                : 'Smart Pace: OFF (Click to enable)'
-            }
-            aria-label="Toggle Smart Pace"
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs font-mono transition-all ${
-              settings.smartPace
-                ? 'font-bold shadow-xs'
-                : `${theme.borderClass} ${theme.textMuted} opacity-70 hover:opacity-100`
-            }`}
-            style={
-              settings.smartPace
-                ? {
-                    borderColor: `${highlight.hex}60`,
-                    color: highlight.hex,
-                    backgroundColor: `${highlight.hex}18`,
-                  }
-                : undefined
-            }
-          >
-            <Zap className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Smart Pace</span>
-          </button>
-
-          {/* Drift Animation Quick Toggle */}
-          <button
-            id="toggle-drift-animation-btn"
-            type="button"
-            onClick={() => onUpdateSettings({ driftAnimation: !settings.driftAnimation })}
-            title={
-              settings.driftAnimation
-                ? `Drift Animation: ON (${settings.driftIntensity || 'moderate'}, shifts active word periodically to eliminate fixed-point eye strain)`
-                : 'Drift Animation: OFF (Click to enable anti-fatigue ocular drift)'
-            }
-            aria-label="Toggle Drift Animation"
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs font-mono transition-all ${
-              settings.driftAnimation
-                ? 'font-bold shadow-xs'
-                : `${theme.borderClass} ${theme.textMuted} opacity-70 hover:opacity-100`
-            }`}
-            style={
-              settings.driftAnimation
-                ? {
-                    borderColor: '#06b6d480',
-                    color: '#22d3ee',
-                    backgroundColor: '#06b6d418',
-                  }
-                : undefined
-            }
-          >
-            <MoveHorizontal className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Drift</span>
-          </button>
-
-          {/* Fading Zoom Entrance Quick Toggle */}
-          <button
-            id="toggle-fading-zoom-btn"
-            type="button"
-            onClick={() => onUpdateSettings({ fadingZoomEntrance: settings.fadingZoomEntrance === false ? true : false })}
-            title={
-              settings.fadingZoomEntrance !== false
-                ? 'Fading Zoom Entrance: ON (Subtly zooms new words in from optical depth to lock eyes in center)'
-                : 'Fading Zoom Entrance: OFF (Click to enable subtle entrance zoom)'
-            }
-            aria-label="Toggle Fading Zoom Entrance"
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs font-mono transition-all ${
-              settings.fadingZoomEntrance !== false
-                ? 'font-bold shadow-xs'
-                : `${theme.borderClass} ${theme.textMuted} opacity-70 hover:opacity-100`
-            }`}
-            style={
-              settings.fadingZoomEntrance !== false
-                ? {
-                    borderColor: `${highlight.hex}60`,
-                    color: highlight.hex,
-                    backgroundColor: `${highlight.hex}18`,
-                  }
-                : undefined
-            }
-          >
-            <Crosshair className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Zoom</span>
-          </button>
-
-          {warmupStatus?.isWarmingUp ? (
-            <div 
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-300 text-xs font-mono"
-              title={`Warm-up Mode: Reading at ${warmupStatus.currentWpm} WPM, smoothly increasing to target ${settings.wpm} WPM (${warmupStatus.sessionWordsRead}/${warmupStatus.totalWarmupWords} words)`}
-            >
-              <Flame className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
-              <span className="font-bold text-amber-300">{warmupStatus.currentWpm}</span>
-              <span className="text-[10px] text-amber-400/80">→ {settings.wpm}</span>
-              <span className="text-[10px] text-amber-400/60 hidden md:inline">({warmupStatus.sessionWordsRead}/300)</span>
-              {onSkipWarmup && (
-                <button
-                  type="button"
-                  onClick={onSkipWarmup}
-                  className="ml-1 text-[10px] underline text-amber-200 hover:text-white"
-                  title="Skip warm-up to reach target speed immediately"
-                >
-                  Skip
-                </button>
-              )}
-            </div>
-          ) : (
-            <span className={`text-xs font-mono font-semibold px-2.5 py-1 rounded-md border ${theme.borderClass} ${theme.cardBgClass} ${theme.textPrimary}`}>
-              <span style={{ color: highlight.hex }}>{settings.wpm}</span> <span className={theme.textMuted}>WPM</span>
-            </span>
-          )}
-        </div>
       </div>
+
+      {/* Right Edge Vertical Action Bar for RSVP Mode */}
+      <aside 
+        id="rsvp-right-edge-toolbar"
+        aria-label="RSVP quick controls"
+        className={`fixed right-2 sm:right-3.5 top-1/2 -translate-y-1/2 z-30 flex flex-col items-center gap-2 p-1.5 rounded-2xl border ${theme.borderClass} ${theme.cardBgClass} backdrop-blur-md shadow-2xl transition-all duration-500 ease-out max-h-[calc(100vh-80px)] overflow-y-auto ${
+          isIdle ? 'opacity-0 translate-x-4 pointer-events-none' : 'opacity-100 translate-x-0'
+        }`}
+      >
+        {/* Words per Flash Selector (Vertical 1w / 3w / 5w) */}
+        <div 
+          id="rsvp-word-count-selector"
+          className={`flex flex-col items-center rounded-xl border ${theme.borderClass} ${theme.cardBgClass} p-1 text-xs font-mono shadow-xs w-11 gap-0.5`}
+          title="RSVP Words shown per flash: 1, 3, or 5 words"
+        >
+          {([1, 3, 5] as const).map((count) => {
+            const isSelected = (settings.chunkSize || 1) === count;
+            return (
+              <button
+                key={count}
+                type="button"
+                onClick={() => onUpdateSettings({ chunkSize: count })}
+                title={`Show ${count} ${count === 1 ? 'word' : 'words'} per flash`}
+                aria-label={`Show ${count} words per flash`}
+                className={`w-full py-1 rounded-lg text-center font-bold text-xs transition-all cursor-pointer ${
+                  isSelected
+                    ? 'text-white shadow-xs'
+                    : `${theme.textMuted} hover:${theme.textPrimary}`
+                }`}
+                style={isSelected ? { backgroundColor: highlight.hex } : undefined}
+              >
+                {count}w
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Word Size Controller (Vertical A+ / Size / A-) */}
+        <div 
+          id="rsvp-font-size-control-vertical"
+          className={`flex flex-col items-center rounded-xl border ${theme.borderClass} ${theme.cardBgClass} p-1 text-xs font-mono shadow-xs w-11`}
+          title={`RSVP word size: ${settings.fontSize}px`}
+        >
+          <button
+            id="rsvp-font-increase-btn"
+            type="button"
+            onClick={() => onUpdateSettings({ fontSize: Math.min(100, settings.fontSize + 4) })}
+            title="Increase word size (+)"
+            aria-label="Increase word size (+)"
+            className={`w-full py-1 rounded-lg font-bold text-xs flex items-center justify-center ${theme.textMuted} hover:${theme.textPrimary} hover:${theme.accentSurface} transition-colors cursor-pointer`}
+          >
+            <span className="text-[11px] font-bold">A+</span>
+          </button>
+          <span className={`py-0.5 text-[10px] font-mono font-bold ${theme.textPrimary}`}>
+            {settings.fontSize}
+          </span>
+          <button
+            id="rsvp-font-decrease-btn"
+            type="button"
+            onClick={() => onUpdateSettings({ fontSize: Math.max(28, settings.fontSize - 4) })}
+            title="Decrease word size (-)"
+            aria-label="Decrease word size (-)"
+            className={`w-full py-1 rounded-lg font-bold text-xs flex items-center justify-center ${theme.textMuted} hover:${theme.textPrimary} hover:${theme.accentSurface} transition-colors cursor-pointer`}
+          >
+            <span className="text-[11px] font-bold">A-</span>
+          </button>
+        </div>
+
+        {/* Smart Pace Quick Toggle (Vertical) */}
+        <button
+          id="toggle-smart-pace-btn"
+          type="button"
+          onClick={() => onUpdateSettings({ smartPace: !settings.smartPace })}
+          title={
+            settings.smartPace
+              ? 'Smart Pace: ON (Dynamically adapts speed to word complexity & length)'
+              : 'Smart Pace: OFF (Click to enable)'
+          }
+          aria-label="Toggle Smart Pace"
+          className={`flex flex-col items-center justify-center p-2 rounded-xl border text-xs font-mono transition-all shadow-xs w-11 cursor-pointer ${
+            settings.smartPace
+              ? 'font-bold'
+              : `${theme.borderClass} ${theme.cardBgClass} ${theme.textMuted} opacity-75 hover:opacity-100`
+          }`}
+          style={
+            settings.smartPace
+              ? {
+                  borderColor: `${highlight.hex}60`,
+                  color: highlight.hex,
+                  backgroundColor: `${highlight.hex}18`,
+                }
+              : undefined
+          }
+        >
+          <Zap className="w-4 h-4" />
+          <span className="text-[8px] font-bold mt-0.5">Pace</span>
+        </button>
+
+        {/* Drift Animation Quick Toggle (Vertical) */}
+        <button
+          id="toggle-drift-animation-btn"
+          type="button"
+          onClick={() => onUpdateSettings({ driftAnimation: !settings.driftAnimation })}
+          title={
+            settings.driftAnimation
+              ? `Drift Animation: ON (${settings.driftIntensity || 'moderate'}, shifts active word periodically to eliminate fixed-point eye strain)`
+              : 'Drift Animation: OFF (Click to enable anti-fatigue ocular drift)'
+          }
+          aria-label="Toggle Drift Animation"
+          className={`flex flex-col items-center justify-center p-2 rounded-xl border text-xs font-mono transition-all shadow-xs w-11 cursor-pointer ${
+            settings.driftAnimation
+              ? 'font-bold'
+              : `${theme.borderClass} ${theme.cardBgClass} ${theme.textMuted} opacity-75 hover:opacity-100`
+          }`}
+          style={
+            settings.driftAnimation
+              ? {
+                  borderColor: `${highlight.hex}60`,
+                  color: highlight.hex,
+                  backgroundColor: `${highlight.hex}18`,
+                }
+              : undefined
+          }
+        >
+          <MoveHorizontal className="w-4 h-4" />
+          <span className="text-[8px] font-bold mt-0.5">Drift</span>
+        </button>
+
+        {/* Fading Zoom Entrance Quick Toggle (Vertical) */}
+        <button
+          id="toggle-fading-zoom-btn"
+          type="button"
+          onClick={() => onUpdateSettings({ fadingZoomEntrance: settings.fadingZoomEntrance === false ? true : false })}
+          title={
+            settings.fadingZoomEntrance !== false
+              ? 'Fading Zoom Entrance: ON (Subtly zooms new words in from optical depth to lock eyes in center)'
+              : 'Fading Zoom Entrance: OFF (Click to enable subtle entrance zoom)'
+          }
+          aria-label="Toggle Fading Zoom Entrance"
+          className={`flex flex-col items-center justify-center p-2 rounded-xl border text-xs font-mono transition-all shadow-xs w-11 cursor-pointer ${
+            settings.fadingZoomEntrance !== false
+              ? 'font-bold'
+              : `${theme.borderClass} ${theme.cardBgClass} ${theme.textMuted} opacity-75 hover:opacity-100`
+          }`}
+          style={
+            settings.fadingZoomEntrance !== false
+              ? {
+                  borderColor: `${highlight.hex}60`,
+                  color: highlight.hex,
+                  backgroundColor: `${highlight.hex}18`,
+                }
+              : undefined
+          }
+        >
+          <Crosshair className="w-4 h-4" />
+          <span className="text-[8px] font-bold mt-0.5">Zoom</span>
+        </button>
+
+        {/* Speed / Warmup Badge (Vertical) */}
+        {warmupStatus?.isWarmingUp ? (
+          <div 
+            className="w-11 py-1.5 rounded-xl border border-amber-500/40 bg-amber-500/10 text-amber-300 text-xs font-mono flex flex-col items-center justify-center shadow-xs"
+            title={`Warm-up Mode: Reading at ${warmupStatus.currentWpm} WPM, smoothly increasing to target ${settings.wpm} WPM (${warmupStatus.sessionWordsRead}/${warmupStatus.totalWarmupWords} words)`}
+          >
+            <Flame className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+            <span className="font-bold text-[10px] text-amber-300 leading-tight">{warmupStatus.currentWpm}</span>
+            <span className="text-[8px] text-amber-400/80">WPM</span>
+            {onSkipWarmup && (
+              <button
+                type="button"
+                onClick={onSkipWarmup}
+                className="text-[8px] underline text-amber-200 hover:text-white mt-0.5 cursor-pointer"
+                title="Skip warm-up to reach target speed immediately"
+              >
+                Skip
+              </button>
+            )}
+          </div>
+        ) : (
+          <div 
+            className={`w-11 py-1.5 rounded-xl border ${theme.borderClass} ${theme.cardBgClass} text-xs font-mono font-semibold flex flex-col items-center justify-center shadow-xs`}
+            title={`Current reading speed: ${settings.wpm} WPM`}
+          >
+            <span style={{ color: highlight.hex }} className="font-bold text-[11px] leading-tight">{settings.wpm}</span>
+            <span className={`text-[8px] ${theme.textMuted}`}>WPM</span>
+          </div>
+        )}
+
+        {/* Switch to Flow Mode Button (Vertical) */}
+        {onSwitchToFlow && (
+          <button
+            id="rsvp-switch-to-flow-btn"
+            type="button"
+            onClick={onSwitchToFlow}
+            title="Switch to Full Text Flow Mode"
+            aria-label="Switch to Flow Mode"
+            className={`flex flex-col items-center justify-center p-2 rounded-xl border ${theme.borderClass} ${theme.cardBgClass} ${theme.textPrimary} hover:${theme.accentSurface} transition-colors shadow-xs w-11 cursor-pointer`}
+          >
+            <AlignLeft className="w-4 h-4 text-red-500" />
+            <span className="text-[8px] font-semibold mt-0.5">Flow</span>
+          </button>
+        )}
+      </aside>
 
       {/* Main Center Reading Stage */}
       <div className="relative my-auto py-12 sm:py-20 flex flex-col items-center justify-center min-h-[300px] sm:min-h-[380px]">

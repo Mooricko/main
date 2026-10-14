@@ -1279,6 +1279,7 @@ export default function App() {
             onWordStep={handleWordStep}
             onSkipWarmup={handleSkipWarmup}
             onResetWarmup={handleResetWarmup}
+            onSwitchToFlow={() => setViewMode('flow')}
           />
         ) : (
           <FlowReader
