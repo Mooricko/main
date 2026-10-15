@@ -1,6 +1,18 @@
 @import "tailwindcss";
 
 @layer base {
+  :root {
+    --background: #0b0f17;
+    --foreground: #f8fafc;
+    --muted: rgba(255, 255, 255, 0.08);
+    --muted-foreground: #94a3b8;
+    --border: rgba(255, 255, 255, 0.12);
+    --popover: #0f172a;
+    --popover-foreground: #f8fafc;
+    --ring: #ef4444;
+    --primary: #ef4444;
+  }
+
   body {
     transition: background-color 0.25s ease, color 0.25s ease;
     overflow-x: hidden;
