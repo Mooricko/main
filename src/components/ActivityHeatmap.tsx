@@ -271,10 +271,12 @@ export function ActivityHeatmap({
     const tip = tipRef.current;
     if (!tip || !tooltip) return;
     const bounds = tip.getBoundingClientRect();
+    const winW = typeof window !== "undefined" ? window.innerWidth : 1024;
+    const winH = typeof window !== "undefined" ? window.innerHeight : 768;
     const left = (tooltip.left + tooltip.right - bounds.width) / 2;
     const top = tooltip.top - bounds.height - 8 >= 8 ? tooltip.top - bounds.height - 8 : tooltip.bottom + 8;
-    tip.style.left = `${Math.max(8, Math.min(innerWidth - bounds.width - 8, left))}px`;
-    tip.style.top = `${Math.max(8, Math.min(innerHeight - bounds.height - 8, top))}px`;
+    tip.style.left = `${Math.max(8, Math.min(winW - bounds.width - 8, left))}px`;
+    tip.style.top = `${Math.max(8, Math.min(winH - bounds.height - 8, top))}px`;
   }, [tooltip]);
 
   const showTooltip = (cell: Cell, target: HTMLElement) => {
@@ -395,7 +397,7 @@ export function ActivityHeatmap({
               disabled={!visible}
               tabIndex={visible && cell.date === tabDate ? 0 : -1}
               className="absolute left-0 top-0 m-0 cursor-crosshair rounded-[1.5px] border-0 bg-muted p-0 outline-none hover:ring-2 hover:ring-ring focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-              style={{ width: layout.edge, height: layout.edge, transform: `translate(${at.x}px, ${at.y}px)`, opacity: visible ? 1 : 0, pointerEvents: visible ? "auto" : "none", backgroundColor: levelColor(level), transitionProperty: "transform, opacity", transitionDuration: reduced ? "0ms" : "620ms", transitionTimingFunction: "cubic-bezier(0.22, 1, 0.36, 1)", transitionDelay: reduced ? "0ms" : `${index % 13 * 12}ms` }}
+              style={{ width: layout.edge, height: layout.edge, transform: `translate(${at.x}px, ${at.y}px)`, opacity: visible ? 1 : 0, pointerEvents: visible ? "auto" : "none", backgroundColor: levelColor(level) || "rgba(148, 163, 184, 0.14)", transitionProperty: "transform, opacity", transitionDuration: reduced ? "0ms" : "620ms", transitionTimingFunction: "cubic-bezier(0.22, 1, 0.36, 1)", transitionDelay: reduced ? "0ms" : `${index % 13 * 12}ms` }}
               onPointerEnter={(event) => showTooltip(cell, event.currentTarget)}
               onPointerLeave={() => setTooltip(null)}
               onFocus={(event) => { setFocusedDate(cell.date); showTooltip(cell, event.currentTarget); }}
@@ -407,10 +409,10 @@ export function ActivityHeatmap({
 
         <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[10px] leading-4 text-muted-foreground">
           <span>{rangeLabel}</span>
-          {showLegend && <div data-legend className="flex items-center gap-1.5" aria-label="Color intensity: less to more activity"><span>Less</span>{LEVEL_MIX.map((_, level) => <span key={level} className="h-2 w-2 rounded-[1px] bg-muted" style={{ backgroundColor: levelColor(level) }} />)}<span>More</span></div>}
+          {showLegend && <div data-legend className="flex items-center gap-1.5" aria-label="Color intensity: less to more activity"><span>Less</span>{LEVEL_MIX.map((_, level) => <span key={level} className="h-2 w-2 rounded-[1px] bg-muted" style={{ backgroundColor: levelColor(level) || "rgba(148, 163, 184, 0.14)" }} />)}<span>More</span></div>}
         </div>
       </div>
-      {tooltip && <div ref={tipRef} id={tooltipId} role="tooltip" className="pointer-events-none fixed z-50 w-max max-w-[calc(100vw-16px)] rounded-lg border border-border bg-popover px-3 py-2 text-popover-foreground shadow-lg backdrop-blur-md" style={{ left: 8, top: 8 }}>
+      {tooltip && <div ref={tipRef} id={tooltipId} role="tooltip" className="pointer-events-none fixed z-[70] w-max max-w-[calc(100vw-16px)] rounded-lg border border-border bg-popover px-3 py-2 text-popover-foreground shadow-lg backdrop-blur-md" style={{ left: 8, top: 8 }}>
         <p className="text-[10px] text-muted-foreground">{tooltip.cell.label}</p>
         <p className="mt-0.5 text-xs font-semibold">{valueLabel(tooltip.cell.value)}{tooltip.cell.value === 0 ? " · No activity" : ""}</p>
       </div>}

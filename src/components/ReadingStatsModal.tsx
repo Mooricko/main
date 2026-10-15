@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   X, 
   TrendingUp, 
@@ -27,6 +27,7 @@ import {
 } from 'recharts';
 import { ReaderSettings, ReadingStatsSummary, WpmHistoryPoint, SessionSpeedProgressPoint } from '../types';
 import { THEME_CONFIGS, HIGHLIGHT_COLORS } from '../utils/themeStyles';
+import { ActivityHeatmap, ActivityDatum, formatCompact } from './ActivityHeatmap';
 
 interface ReadingStatsModalProps {
   isOpen: boolean;
@@ -47,9 +48,71 @@ export const ReadingStatsModal: React.FC<ReadingStatsModalProps> = ({
 }) => {
   const [filterMode, setFilterMode] = useState<'all' | 'recent' | 'current'>('all');
   const [showConfirmReset, setShowConfirmReset] = useState(false);
+  const [heatmapMetric, setHeatmapMetric] = useState<'words' | 'minutes'>('words');
+  const [heatmapDays, setHeatmapDays] = useState<number>(365);
 
   const theme = THEME_CONFIGS[settings.theme];
   const highlight = HIGHLIGHT_COLORS[settings.highlightColor];
+
+  // Aggregate daily reading activity for the ActivityHeatmap
+  const activityHeatmapData = useMemo(() => {
+    const dailyMap = new Map<string, number>();
+
+    const toDateKey = (ts: number | Date) => {
+      const d = new Date(ts);
+      if (isNaN(d.getTime())) return null;
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+
+    // 1. Process recent completed sessions
+    if (statsSummary.recentSessions && statsSummary.recentSessions.length > 0) {
+      for (const sess of statsSummary.recentSessions) {
+        if (!sess.timestamp) continue;
+        const key = toDateKey(sess.timestamp);
+        if (!key) continue;
+        const val = heatmapMetric === 'words' 
+          ? sess.wordsRead 
+          : Math.max(1, Math.round(sess.dwellMs / 60000));
+        dailyMap.set(key, (dailyMap.get(key) || 0) + val);
+      }
+    }
+
+    // 2. Process chronological history points if any days weren't captured in sessions
+    if (statsSummary.wpmHistory && statsSummary.wpmHistory.length > 0) {
+      for (const pt of statsSummary.wpmHistory) {
+        if (!pt.timestamp) continue;
+        const key = toDateKey(pt.timestamp);
+        if (!key) continue;
+        if (!dailyMap.has(key)) {
+          const val = heatmapMetric === 'words'
+            ? pt.wordsRead
+            : Math.max(1, Math.round((pt.dwellSeconds || 0) / 60));
+          dailyMap.set(key, val);
+        }
+      }
+    }
+
+    // 3. Include active document reading today
+    if (statsSummary.currentDocWordsRead > 0) {
+      const todayKey = toDateKey(new Date());
+      if (todayKey) {
+        const val = heatmapMetric === 'words'
+          ? statsSummary.currentDocWordsRead
+          : Math.max(1, Math.round(statsSummary.currentDocDwellMs / 60000));
+        dailyMap.set(todayKey, Math.max(dailyMap.get(todayKey) || 0, val));
+      }
+    }
+
+    const data: ActivityDatum[] = [];
+    dailyMap.forEach((value, date) => {
+      data.push({ date, value });
+    });
+
+    return data;
+  }, [statsSummary, heatmapMetric]);
 
   // Close on Escape key
   useEffect(() => {
@@ -467,6 +530,102 @@ export const ReadingStatsModal: React.FC<ReadingStatsModalProps> = ({
                   </p>
                 </div>
               )}
+            </div>
+          </div>
+
+          {/* Daily Reading Activity Heatmap & Consistency Section */}
+          <div 
+            id="stat-card-activity-heatmap" 
+            className={`p-4 sm:p-5 rounded-2xl border ${theme.borderClass} ${theme.inputBg} space-y-4`}
+          >
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Flame className="w-4 h-4 text-amber-400" />
+                  <h3 className={`text-sm sm:text-base font-bold ${theme.textPrimary}`}>
+                    Daily Reading Activity & Streaks
+                  </h3>
+                  <span 
+                    className="px-2 py-0.5 rounded text-[10px] font-mono font-semibold border shadow-xs"
+                    style={{
+                      backgroundColor: `${highlight.hex}15`,
+                      borderColor: `${highlight.hex}30`,
+                      color: highlight.hex,
+                    }}
+                  >
+                    Habit Heatmap
+                  </span>
+                </div>
+                <p className={`text-xs ${theme.textMuted}`}>
+                  Daily reading frequency, streak consistency, and volume across the calendar
+                </p>
+              </div>
+
+              {/* Metric & Range Selector Controls */}
+              <div className="flex items-center gap-2 flex-wrap">
+                {/* Metric toggle */}
+                <div className="flex items-center gap-1 p-1 rounded-xl bg-black/20 border border-white/5">
+                  <button
+                    type="button"
+                    onClick={() => setHeatmapMetric('words')}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                      heatmapMetric === 'words'
+                        ? `${highlight.bgBadge} border shadow-xs`
+                        : `${theme.textMuted} hover:${theme.textPrimary}`
+                    }`}
+                  >
+                    Words Read
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setHeatmapMetric('minutes')}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                      heatmapMetric === 'minutes'
+                        ? `${highlight.bgBadge} border shadow-xs`
+                        : `${theme.textMuted} hover:${theme.textPrimary}`
+                    }`}
+                  >
+                    Reading Time
+                  </button>
+                </div>
+
+                {/* Days range toggle */}
+                <div className="flex items-center gap-1 p-1 rounded-xl bg-black/20 border border-white/5">
+                  {[
+                    { label: '90d', days: 90 },
+                    { label: '180d', days: 180 },
+                    { label: '1 Year', days: 365 },
+                  ].map((range) => (
+                    <button
+                      key={range.days}
+                      type="button"
+                      onClick={() => setHeatmapDays(range.days)}
+                      className={`px-2 py-1 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
+                        heatmapDays === range.days
+                          ? 'bg-white/10 text-white border border-white/15 shadow-xs'
+                          : `${theme.textMuted} hover:${theme.textPrimary}`
+                      }`}
+                    >
+                      {range.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Activity Heatmap Canvas */}
+            <div className="w-full pt-1">
+              <ActivityHeatmap
+                data={activityHeatmapData}
+                color={highlight.hex}
+                unit={heatmapMetric === 'words' ? 'words' : 'min'}
+                days={heatmapDays}
+                showLegend={true}
+                showMonths={true}
+                showWeekdays={true}
+                autoPlay={false}
+                formatValue={formatCompact}
+              />
             </div>
           </div>
 
