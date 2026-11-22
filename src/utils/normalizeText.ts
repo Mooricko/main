@@ -71,9 +71,44 @@ export function extractSuggestedTitle(content: string, fallback = 'Imported Read
 
 /**
  * Detects text language direction ('rtl' or 'ltr').
+ * Calculates RTL vs Latin/LTR script dominance so mixed documents and Markdown
+ * syntax characters don't distort the true reading orientation.
  */
 export function detectTextDirection(text: string): 'rtl' | 'ltr' {
-  return isRtlText(text) ? 'rtl' : 'ltr';
+  if (!text) return 'ltr';
+
+  const sample = text.length > 5000 ? text.slice(0, 5000) : text;
+  let rtlCount = 0;
+  let ltrCount = 0;
+
+  for (let i = 0; i < sample.length; i++) {
+    const code = sample.charCodeAt(i);
+    // Arabic, Persian, Hebrew Unicode blocks
+    if (
+      (code >= 0x0590 && code <= 0x05ff) ||
+      (code >= 0x0600 && code <= 0x06ff) ||
+      (code >= 0x0750 && code <= 0x077f) ||
+      (code >= 0x08a0 && code <= 0x08ff) ||
+      (code >= 0xfb1d && code <= 0xfdff) ||
+      (code >= 0xfe70 && code <= 0xfeff)
+    ) {
+      rtlCount++;
+    } else if (
+      (code >= 65 && code <= 90) ||
+      (code >= 97 && code <= 122) ||
+      (code >= 0x00c0 && code <= 0x024f)
+    ) {
+      ltrCount++;
+    }
+  }
+
+  if (rtlCount > 0 && rtlCount >= ltrCount) {
+    return 'rtl';
+  }
+  if (rtlCount > 0 && ltrCount === 0) {
+    return 'rtl';
+  }
+  return 'ltr';
 }
 
 /**

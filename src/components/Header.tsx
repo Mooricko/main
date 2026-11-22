@@ -67,8 +67,8 @@ export const Header: React.FC<HeaderProps> = ({
   return (
     <header
       id="app-header"
-      className={`w-full border-b ${theme.borderClass} ${theme.cardBgClass} transition-all duration-700 ease-out z-30 shrink-0 ${
-        isIdle ? 'opacity-0 -translate-y-4 pointer-events-none' : 'opacity-100 translate-y-0'
+      className={`w-full border-b ${theme.borderClass} ${theme.cardBgClass} transition-opacity duration-700 ease-out z-30 shrink-0 ${
+        isIdle ? 'opacity-0' : 'opacity-100'
       }`}
     >
       <div className="max-w-7xl mx-auto px-4 py-2.5 sm:px-6 flex items-center justify-between gap-3">

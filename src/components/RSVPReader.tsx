@@ -55,11 +55,13 @@ interface RSVPReaderProps {
   isAutoPaused?: boolean;
   autoPauseReason?: AutoPauseReason | null;
   onResume?: () => void;
+  onPlayPointerDown?: () => void;
   warmupStatus?: WarmupStatus;
   onWordStep?: () => void;
   onSkipWarmup?: () => void;
   onResetWarmup?: () => void;
   onSwitchToFlow?: () => void;
+  actualWpm?: number;
 }
 
 export const RSVPReader: React.FC<RSVPReaderProps> = ({
@@ -81,11 +83,13 @@ export const RSVPReader: React.FC<RSVPReaderProps> = ({
   isAutoPaused = false,
   autoPauseReason = null,
   onResume,
+  onPlayPointerDown,
   warmupStatus,
   onWordStep,
   onSkipWarmup,
   onResetWarmup,
   onSwitchToFlow,
+  actualWpm,
 }) => {
   const theme = THEME_CONFIGS[settings.theme];
   const highlight = HIGHLIGHT_COLORS[settings.highlightColor];
@@ -96,6 +100,16 @@ export const RSVPReader: React.FC<RSVPReaderProps> = ({
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const [hasFinished, setHasFinished] = useState(false);
   const [docStructure, setDocStructure] = useState<DocumentStructure | null>(null);
+
+  useEffect(() => {
+    setHasFinished(false);
+  }, [_handle]);
+
+  useEffect(() => {
+    if (hasFinished && effectiveTotalWords > 0 && currentIndex < effectiveTotalWords - 1) {
+      setHasFinished(false);
+    }
+  }, [hasFinished, currentIndex, effectiveTotalWords]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -465,8 +479,8 @@ export const RSVPReader: React.FC<RSVPReaderProps> = ({
     <div className="flex flex-col flex-1 w-full max-w-5xl mx-auto px-4 sm:px-6 py-3 sm:py-6 justify-between select-none min-h-0 overflow-hidden relative">
       {/* Top Status & Context Info */}
       <div 
-        className={`flex items-center justify-between gap-3 text-xs transition-all duration-700 ease-out shrink-0 z-20 ${
-          isIdle ? 'opacity-0 -translate-y-4 pointer-events-none' : 'opacity-100 translate-y-0'
+        className={`flex items-center justify-between gap-3 text-xs transition-opacity duration-700 ease-out shrink-0 z-20 ${
+          isIdle ? 'opacity-0' : 'opacity-100'
         }`}
       >
         <div className="flex items-center gap-2">
@@ -484,8 +498,8 @@ export const RSVPReader: React.FC<RSVPReaderProps> = ({
       <aside 
         id="rsvp-right-edge-toolbar"
         aria-label="RSVP quick controls"
-        className={`fixed right-2 sm:right-3.5 top-1/2 -translate-y-1/2 z-30 flex flex-col items-center gap-2 p-1.5 rounded-2xl border ${theme.borderClass} ${theme.cardBgClass} backdrop-blur-md shadow-2xl transition-all duration-500 ease-out max-h-[calc(100vh-80px)] overflow-y-auto ${
-          isIdle ? 'opacity-0 translate-x-4 pointer-events-none' : 'opacity-100 translate-x-0'
+        className={`fixed right-2 sm:right-3.5 top-1/2 -translate-y-1/2 z-30 flex flex-col items-center gap-2 p-1.5 rounded-2xl border ${theme.borderClass} ${theme.cardBgClass} backdrop-blur-md shadow-2xl transition-opacity duration-500 ease-out max-h-[calc(100vh-80px)] overflow-y-auto ${
+          isIdle ? 'opacity-0' : 'opacity-100'
         }`}
       >
         {/* Words per Flash Selector (Vertical 1w / 3w / 5w) */}
@@ -725,8 +739,14 @@ export const RSVPReader: React.FC<RSVPReaderProps> = ({
               Reading Completed!
             </h2>
             <p className={`text-sm ${theme.textMuted} max-w-sm mb-6`}>
-              You read <span className="font-semibold text-slate-200">{effectiveTotalWords} words</span> at{' '}
-              <span className="font-semibold text-slate-200">{settings.wpm} WPM</span>.
+              You read <span className={`font-semibold ${theme.textPrimary}`}>{effectiveTotalWords} words</span> at{' '}
+              <span className={`font-semibold ${theme.textPrimary}`}>
+                {actualWpm !== undefined ? actualWpm : settings.wpm} WPM
+              </span>
+              {actualWpm !== undefined && actualWpm !== settings.wpm && (
+                <span> (target {settings.wpm} WPM)</span>
+              )}
+              .
             </p>
             <button
               id="restart-completed-btn"
@@ -801,20 +821,30 @@ export const RSVPReader: React.FC<RSVPReaderProps> = ({
 
       {/* Playback Controls & Timeline Bar */}
       <div 
-        className={`w-full rounded-2xl border ${theme.borderClass} ${theme.cardBgClass} p-4 sm:p-5 shadow-lg transition-all duration-700 ease-out shrink-0 z-20 ${
-          isIdle ? 'opacity-0 translate-y-4 pointer-events-none' : 'opacity-100 translate-y-0'
+        className={`w-full rounded-2xl border ${theme.borderClass} ${theme.cardBgClass} p-4 sm:p-5 shadow-lg transition-opacity duration-700 ease-out shrink-0 z-20 ${
+          isIdle ? 'opacity-0' : 'opacity-100'
         }`}
       >
         {/* Smart Auto-Pause Active Banner */}
         {isAutoPaused && !isPlaying && (
           <div
             id="smart-auto-pause-indicator"
-            onClick={onResume || onTogglePlay}
+            onPointerDown={() => {
+              setHasFinished(false);
+              onPlayPointerDown?.();
+            }}
+            onClick={() => {
+              setHasFinished(false);
+              onResume ? onResume() : onTogglePlay();
+            }}
             role="button"
             tabIndex={0}
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
+                e.stopPropagation();
+                if (e.repeat) return;
+                setHasFinished(false);
                 onResume ? onResume() : onTogglePlay();
               }
             }}
@@ -895,7 +925,7 @@ export const RSVPReader: React.FC<RSVPReaderProps> = ({
               id="rsvp-restart-btn"
               type="button"
               onClick={onRestart}
-              title="Restart from beginning (R)"
+              title="Restart from beginning (Shift + R)"
               aria-label="Restart"
               className={`p-2.5 rounded-xl border ${theme.borderClass} ${theme.textMuted} hover:${theme.textPrimary} hover:${theme.accentSurface} transition-colors`}
             >
@@ -918,7 +948,7 @@ export const RSVPReader: React.FC<RSVPReaderProps> = ({
               id="rsvp-prev-word-btn"
               type="button"
               onClick={() => handleJump(-1)}
-              title="Previous Word"
+              title="Previous Word (Shift + Left Arrow)"
               aria-label="Previous Word"
               className={`p-2.5 rounded-xl border ${theme.borderClass} ${theme.textMuted} hover:${theme.textPrimary} hover:${theme.accentSurface} transition-colors`}
             >
@@ -931,6 +961,12 @@ export const RSVPReader: React.FC<RSVPReaderProps> = ({
             id="rsvp-play-pause-btn"
             viewMode="icon"
             isPlaying={isPlaying}
+            onPointerDown={() => {
+              if (!isPlaying || isAutoPaused) {
+                setHasFinished(false);
+                onPlayPointerDown?.();
+              }
+            }}
             onClick={() => {
               setHasFinished(false);
               onTogglePlay();
@@ -946,7 +982,7 @@ export const RSVPReader: React.FC<RSVPReaderProps> = ({
               id="rsvp-next-word-btn"
               type="button"
               onClick={() => handleJump(1)}
-              title="Next Word (Right Arrow)"
+              title="Next Word (Shift + Right Arrow)"
               aria-label="Next Word"
               className={`p-2.5 rounded-xl border ${theme.borderClass} ${theme.textMuted} hover:${theme.textPrimary} hover:${theme.accentSurface} transition-colors`}
             >
@@ -957,7 +993,7 @@ export const RSVPReader: React.FC<RSVPReaderProps> = ({
               id="rsvp-forward-10-btn"
               type="button"
               onClick={() => handleJump(10)}
-              title="Forward 10 words"
+              title="Forward 10 words (Right Arrow)"
               aria-label="Forward 10 words"
               className={`flex items-center gap-1 px-3 py-2 rounded-xl border ${theme.borderClass} ${theme.textPrimary} hover:${theme.accentSurface} text-xs font-semibold transition-colors`}
             >

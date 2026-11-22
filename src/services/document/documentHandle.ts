@@ -305,8 +305,11 @@ export class DocumentHandle implements ReaderDocumentHandle {
     }
 
     const text = await documentStorageService.getDocumentText(this.id);
-    this.fullTextCache = text ?? '';
-    return this.fullTextCache;
+    if (text !== null) {
+      this.fullTextCache = text;
+      return text;
+    }
+    return '';
   }
 
   /**

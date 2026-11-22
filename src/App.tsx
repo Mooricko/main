@@ -35,7 +35,16 @@ import { SettingsDrawer } from './components/SettingsDrawer';
 import { KeyboardShortcutsModal } from './components/KeyboardShortcutsModal';
 import { ExtensionHubModal } from './components/ExtensionHubModal';
 import { FocusTimerModal } from './components/FocusTimerModal';
+import { FocusMilestoneModal } from './components/FocusMilestoneModal';
 import { ReadingStatsModal } from './components/ReadingStatsModal';
+import { triggerFocusBlockConfetti } from './utils/confettiCelebration';
+import { 
+  getFocusMilestonesData, 
+  recordFocusBlockCompleted, 
+  FocusMilestonesData, 
+  FocusMilestone, 
+  FocusCompletedSession 
+} from './services/focus/focusMilestoneService';
 import { classifyDocumentSize } from './services/structure/documentSizeClassifier';
 import { safeStorage } from './utils/safeStorage';
 import { 
@@ -45,14 +54,26 @@ import {
 } from './utils/extensionBridge';
 import { useReadingHeatmap } from './hooks/useReadingHeatmap';
 import { useSmartAutoPause, AutoPauseReason } from './hooks/useSmartAutoPause';
+import { useControlsIdle } from './hooks/useControlsIdle';
 import { useReaderWindow } from './hooks/useReaderWindow';
 import { calculateWarmupStatus, WARMUP_TOTAL_WORDS } from './utils/smartPacing';
 import { documentStorageService } from './services/document/documentStorageService';
 import { createDocumentHandle } from './services/document/documentHandle';
 import { workerProcessingService } from './services/worker/workerProcessingService';
-import { migrateLocalStorageToIndexedDB, DOCUMENT_STORAGE_KEYS } from './services/document/migration';
+import {
+  migrateLocalStorageToIndexedDB,
+  ensureSampleDocumentInStorage,
+  DOCUMENT_STORAGE_KEYS,
+} from './services/document/migration';
+import {
+  buildHistoryExcerpt,
+  createUniqueDocumentId,
+  upsertHistoryDocument,
+} from './services/document/readingHistory';
 import { hasDragDataFromOutside, extractLinkFromDataTransfer } from './services/import/detectInput';
-import { CheckCircle2, Zap, Upload } from 'lucide-react';
+import { extractClipboardContent } from './services/import/extractText';
+import { resolveKeyboardShortcut, extractShortcutKeyEvent } from './utils/keyboardShortcuts';
+import { CheckCircle2, Zap, Upload, Undo2 } from 'lucide-react';
 
 const DEFAULT_SETTINGS: ReaderSettings = {
   wpm: 320,
@@ -180,11 +201,16 @@ export default function App() {
     }
     return SAMPLE_TEXTS[0].id;
   });
+  const activeDocIdRef = useRef<string>(activeDocId);
+  activeDocIdRef.current = activeDocId;
+
+  // Incremented after storage initialization or document persistence so handles & hooks re-hydrate cleanly
+  const [documentRevision, setDocumentRevision] = useState(0);
 
   // Phase 2 ReaderDocumentHandle abstraction
   const activeDocumentHandle = useMemo(() => {
     return createDocumentHandle(activeDocId);
-  }, [activeDocId]);
+  }, [activeDocId, documentRevision]);
 
   // Phase 2: Run backward-compatible IndexedDB migration and load active document metadata
   useEffect(() => {
@@ -192,38 +218,62 @@ export default function App() {
 
     async function initStorageLayer() {
       try {
-        await migrateLocalStorageToIndexedDB();
+        const migrationResult = await migrateLocalStorageToIndexedDB();
+
+        // Determine the active document ID and ensure built-in samples exist in IndexedDB
+        const storedActiveId = safeStorage.getItem(STORAGE_KEYS.ACTIVE_DOC_ID);
+        const targetId = storedActiveId || migrationResult.activeDocId || activeDocIdRef.current;
+        if (targetId) {
+          await ensureSampleDocumentInStorage(targetId);
+        }
 
         // Refresh document list from IndexedDB metadata
         const dbDocs = await documentStorageService.listDocuments();
         if (isMounted && dbDocs.length > 0) {
-          const lightweight: SavedDocument[] = dbDocs.map((meta) => ({
-            id: meta.id,
-            title: meta.title,
-            wordCount: meta.totalWords,
-            lastReadIndex: meta.lastReadWordIndex,
-            lastReadDate: new Date(meta.updatedAt).toISOString(),
-            category: meta.category,
-            sourceType: meta.sourceType,
-            sourceUrl: meta.sourceUrl,
-            fileName: meta.fileName,
-            direction: meta.direction,
-            totalCharacters: meta.totalCharacters,
-          }));
-          setSavedDocs(lightweight);
+          setSavedDocs((prev) => {
+            const excerptById = new Map(prev.map((doc) => [doc.id, doc.excerpt]));
+            return dbDocs.map((meta) => ({
+              id: meta.id,
+              title: meta.title,
+              wordCount: meta.totalWords,
+              lastReadIndex: meta.lastReadWordIndex,
+              lastReadDate: new Date(meta.updatedAt).toISOString(),
+              category: meta.category,
+              sourceType: meta.sourceType,
+              sourceUrl: meta.sourceUrl,
+              fileName: meta.fileName,
+              direction: meta.direction,
+              totalCharacters: meta.totalCharacters,
+              pageCount: meta.pageCount,
+              hasStructure: meta.hasStructure,
+              excerpt: excerptById.get(meta.id),
+            }));
+          });
         }
 
-        // If an active doc ID exists, load only its metadata from IndexedDB
-        const storedActiveId = safeStorage.getItem(STORAGE_KEYS.ACTIVE_DOC_ID);
-        const targetId = storedActiveId || activeDocId;
+        // Load active document metadata & structure immediately after migration/seeding
         if (targetId) {
-          const meta = await documentStorageService.getMetadata(targetId);
-          if (isMounted && meta) {
-            if (meta.title) setCurrentTitle(meta.title);
-            if (meta.lastReadWordIndex !== undefined && meta.lastReadWordIndex > 0) {
-              setCurrentIndex(meta.lastReadWordIndex);
+          const [meta, struct] = await Promise.all([
+            documentStorageService.getMetadata(targetId),
+            documentStorageService.getStructure(targetId).catch(() => null),
+          ]);
+          if (isMounted) {
+            if (targetId !== activeDocIdRef.current && migrationResult.activeDocId === targetId) {
+              setActiveDocId(targetId);
+            }
+            if (meta && (targetId === activeDocIdRef.current || migrationResult.activeDocId === targetId)) {
+              setActiveMetadata(meta);
+              setActiveStructure(struct);
+              if (meta.title) setCurrentTitle(meta.title);
+              if (meta.lastReadWordIndex !== undefined && meta.lastReadWordIndex > 0) {
+                setCurrentIndex(meta.lastReadWordIndex);
+              }
             }
           }
+        }
+
+        if (isMounted) {
+          setDocumentRevision((rev) => rev + 1);
         }
       } catch (err) {
         console.warn('Phase 2 storage layer initialization error:', err);
@@ -294,7 +344,14 @@ export default function App() {
   const [extensionHubInitialTab, setExtensionHubInitialTab] = useState<'shortcuts' | 'simulator' | 'install' | 'files'>('shortcuts');
   const [isTimerModalOpen, setIsTimerModalOpen] = useState(false);
   const [isStatsModalOpen, setIsStatsModalOpen] = useState(false);
-  const [toastNotification, setToastNotification] = useState<string | null>(null);
+  const [toastNotification, setToastNotification] = useState<{
+    id: number;
+    message: string;
+    actionLabel?: string;
+    onAction?: () => void;
+  } | null>(null);
+  const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const toastIdRef = useRef(0);
 
   // Phase 6: Active document metadata, structure, and navigation state (PART K)
   const [activeMetadata, setActiveMetadata] = useState<DocumentMetadata | null>(null);
@@ -325,8 +382,15 @@ export default function App() {
           activeDocumentHandle.getStructure().catch(() => null),
         ]);
         if (!isMounted) return;
-        setActiveMetadata(meta);
-        setActiveStructure(struct);
+        if (meta) {
+          setActiveMetadata(meta);
+          setActiveStructure(struct);
+        } else {
+          setActiveMetadata((prev) => (prev && prev.id === activeDocumentHandle.id ? prev : null));
+          setActiveStructure((prev) =>
+            prev && prev.documentId === activeDocumentHandle.id ? prev : null
+          );
+        }
       } catch (err) {
         console.warn('Error loading active doc meta/structure:', err);
       }
@@ -349,6 +413,14 @@ export default function App() {
   const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const wasTimerRunningBeforeAutoPauseRef = useRef(false);
 
+  // Focus Milestones & Celebration State
+  const [milestonesData, setMilestonesData] = useState<FocusMilestonesData>(() => getFocusMilestonesData());
+  const [isMilestoneModalOpen, setIsMilestoneModalOpen] = useState(false);
+  const [newlyUnlockedMilestones, setNewlyUnlockedMilestones] = useState<FocusMilestone[]>([]);
+  const [lastCelebratedSession, setLastCelebratedSession] = useState<FocusCompletedSession | undefined>(undefined);
+  const focusBlockStartWordIndexRef = useRef<number>(0);
+  const focusBlockPresetLabelRef = useRef<string>('');
+
   // Timer countdown effect - halts while auto-paused
   useEffect(() => {
     if (isTimerRunning && timerSecondsRemaining > 0 && !isAutoPaused) {
@@ -361,10 +433,46 @@ export default function App() {
             // Auto pause playback when session finishes
             setIsPlaying(false);
 
+            const completedDurationMins = Math.max(1, Math.round(initialTimerDuration / 60));
+            const wordsReadInBlock = Math.max(0, currentIndex - focusBlockStartWordIndexRef.current);
+            const avgWpm = wordsReadInBlock > 0 && completedDurationMins > 0
+              ? Math.round(wordsReadInBlock / completedDurationMins)
+              : settings.wpm;
+
+            // Trigger celebratory multi-stage confetti animation!
+            const currentHighlightHex = HIGHLIGHT_COLORS[settings.highlightColor]?.hex || '#ef4444';
+            triggerFocusBlockConfetti(currentHighlightHex);
+
+            // Record completed focus session and evaluate newly unlocked milestones
+            const { data, newlyUnlocked } = recordFocusBlockCompleted({
+              durationMinutes: completedDurationMins,
+              presetLabel: focusBlockPresetLabelRef.current || `${completedDurationMins}m Focus Block`,
+              wordsRead: wordsReadInBlock,
+              avgWpm,
+            });
+
+            setMilestonesData(data);
+            setNewlyUnlockedMilestones(newlyUnlocked);
+            setLastCelebratedSession(data.lastCompletedSession);
+            setIsMilestoneModalOpen(true);
+
             // Notify user unless Do Not Disturb is enabled
             if (!settings.doNotDisturb) {
-              setToastNotification('🎉 Focus reading session complete! Take a deep breath.');
-              setTimeout(() => setToastNotification(null), 5000);
+              if (toastTimeoutRef.current) {
+                clearTimeout(toastTimeoutRef.current);
+              }
+              const toastId = ++toastIdRef.current;
+              setToastNotification({
+                id: toastId,
+                message:
+                  newlyUnlocked.length > 0
+                    ? `🎉 Focus block complete! Unlocked "${newlyUnlocked[0].title}" milestone!`
+                    : '🎉 Focus reading block complete! Great job staying focused.',
+              });
+              toastTimeoutRef.current = setTimeout(() => {
+                setToastNotification((curr) => (curr?.id === toastId ? null : curr));
+                toastTimeoutRef.current = null;
+              }, 5000);
             }
             return 0;
           }
@@ -381,22 +489,67 @@ export default function App() {
         clearInterval(timerIntervalRef.current);
       }
     };
-  }, [isTimerRunning, timerSecondsRemaining, isAutoPaused, settings.doNotDisturb]);
+  }, [isTimerRunning, timerSecondsRemaining, isAutoPaused, initialTimerDuration, currentIndex, settings.highlightColor, settings.wpm, settings.doNotDisturb]);
 
-  // Show Toast with Do Not Disturb enforcement (Requirement 5)
-  const showToast = useCallback((msg: string) => {
-    // When timer is set and Do Not Disturb is ON, suppress all notifications
-    if (isTimerSet && settings.doNotDisturb) {
+  // Show Toast with Do Not Disturb enforcement (bypassable for destructive-action Undo prompts)
+  const showToast = useCallback((
+    msg: string,
+    options?: {
+      actionLabel?: string;
+      onAction?: () => void;
+      durationMs?: number;
+      bypassDnd?: boolean;
+    }
+  ) => {
+    // When timer is set and Do Not Disturb is ON, suppress informational notifications
+    if (!options?.bypassDnd && isTimerSet && settings.doNotDisturb) {
       return;
     }
-    setToastNotification(msg);
-    setTimeout(() => {
-      setToastNotification((curr) => (curr === msg ? null : curr));
-    }, 4000);
+    if (toastTimeoutRef.current) {
+      clearTimeout(toastTimeoutRef.current);
+      toastTimeoutRef.current = null;
+    }
+    const id = ++toastIdRef.current;
+    setToastNotification({
+      id,
+      message: msg,
+      actionLabel: options?.actionLabel,
+      onAction: options?.onAction,
+    });
+    toastTimeoutRef.current = setTimeout(() => {
+      setToastNotification((curr) => (curr?.id === id ? null : curr));
+      toastTimeoutRef.current = null;
+    }, options?.durationMs ?? 4000);
   }, [isTimerSet, settings.doNotDisturb]);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimeoutRef.current) {
+        clearTimeout(toastTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // Warm-up Mode Session Tracking (Gradually increases speed over first 300 words)
   const [sessionWordsRead, setSessionWordsRead] = useState(0);
+  const sessionWordsReadRef = useRef(sessionWordsRead);
+  sessionWordsReadRef.current = sessionWordsRead;
+
+  // Undo snapshot for accidental/unwanted document restarts
+  const restartUndoRef = useRef<{
+    documentId: string;
+    previousIndex: number;
+    previousSessionWordsRead: number;
+  } | null>(null);
+  const [canUndoRestart, setCanUndoRestart] = useState(false);
+
+  // Clear restart undo snapshot when switching to a different document
+  useEffect(() => {
+    if (restartUndoRef.current && restartUndoRef.current.documentId !== activeDocId) {
+      restartUndoRef.current = null;
+      setCanUndoRestart(false);
+    }
+  }, [activeDocId]);
 
   const warmupStatus = useMemo(() => {
     return calculateWarmupStatus(
@@ -550,16 +703,28 @@ export default function App() {
     };
   }, [clearWindowDrag, showToast]);
 
-  const handleStartTimer = useCallback((durationMinutes = 15) => {
+  const handleStartTimer = useCallback((durationMinutes = 15, presetLabel?: string) => {
     const totalSecs = durationMinutes * 60;
     setInitialTimerDuration(totalSecs);
     setTimerSecondsRemaining(totalSecs);
     setIsTimerSet(true);
     setIsTimerRunning(true);
+    focusBlockStartWordIndexRef.current = currentIndex;
+    focusBlockPresetLabelRef.current = presetLabel || `${durationMinutes}m Focus Block`;
     if (!settings.doNotDisturb) {
       showToast(`⏱️ ${durationMinutes} min focus timer started`);
     }
-  }, [settings.doNotDisturb, showToast]);
+  }, [currentIndex, settings.doNotDisturb, showToast]);
+
+  const handleStartBreak = useCallback((minutes = 5) => {
+    setIsPlaying(false);
+    handleStartTimer(minutes, `${minutes}m Rest Break`);
+    showToast(`☕ ${minutes} min break started. Relax and recharge!`);
+  }, [handleStartTimer, showToast]);
+
+  const handleStartNextBlock = useCallback((minutes = 15) => {
+    handleStartTimer(minutes, `${minutes}m Focus Block`);
+  }, [handleStartTimer]);
 
   const handlePauseTimer = useCallback(() => {
     setIsTimerRunning(false);
@@ -669,10 +834,11 @@ export default function App() {
     ) => {
       const validText = text && text.trim() ? text : SAMPLE_TEXTS[0].text;
       const validTitle = title || 'Custom Reading';
-      const docId =
-        existingId || `doc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const docId = existingId || createUniqueDocumentId('doc');
+      const excerpt = options?.excerpt || buildHistoryExcerpt(validText);
 
       setCurrentTitle(validTitle);
+      activeDocIdRef.current = docId;
       setActiveDocId(docId);
       setCurrentIndex(0);
       setIsPlaying(false);
@@ -694,6 +860,13 @@ export default function App() {
           pages: options?.pages,
         });
 
+        // Immediately sync active metadata/structure & refresh handle so Overview never lags or shows 0 words
+        if (activeDocIdRef.current === docId) {
+          setActiveMetadata(metadata);
+          setActiveStructure(structure);
+          setDocumentRevision((rev) => rev + 1);
+        }
+
         // 2. Persist ONLY lightweight pointers to localStorage (never store giant raw text)
         safeStorage.setItem(STORAGE_KEYS.ACTIVE_DOC_ID, docId);
         safeStorage.setItem(STORAGE_KEYS.CURRENT_TITLE, validTitle);
@@ -713,11 +886,8 @@ export default function App() {
           setIsSidebarOpen(true);
         }
 
-        // 3. Update lightweight saved docs in React state and localStorage
+        // 3. Update lightweight saved docs in React state and localStorage (deduped strictly by ID, never by title)
         setSavedDocs((prev) => {
-          const existingIdx = prev.findIndex(
-            (d) => d.id === docId || d.title === validTitle
-          );
           const newDoc: SavedDocument = {
             id: docId,
             title: validTitle,
@@ -732,15 +902,10 @@ export default function App() {
             totalCharacters: metadata.totalCharacters,
             pageCount: structure.pages?.length,
             hasStructure: Boolean(structure),
+            excerpt,
           };
 
-          let updated: SavedDocument[];
-          if (existingIdx >= 0) {
-            updated = [...prev];
-            updated[existingIdx] = newDoc;
-          } else {
-            updated = [newDoc, ...prev];
-          }
+          const updated = upsertHistoryDocument(prev, newDoc);
           safeStorage.setItem(STORAGE_KEYS.SAVED_DOCS, JSON.stringify(updated));
           return updated;
         });
@@ -908,7 +1073,15 @@ export default function App() {
     totalWordsRef.current = totalWords;
   }, [totalWords]);
 
+  const isPlayingRef = useRef(isPlaying);
+  isPlayingRef.current = isPlaying;
+
+  const isAutoPausedRef = useRef(isAutoPaused);
+  isAutoPausedRef.current = isAutoPaused;
+
   const handleAutoPause = useCallback((reason: AutoPauseReason) => {
+    isPlayingRef.current = false;
+    isAutoPausedRef.current = true;
     setIsPlaying(false);
     setIsAutoPaused(true);
     setAutoPauseReason(reason);
@@ -924,18 +1097,43 @@ export default function App() {
     showToast(`⏸️ Smart Auto-Paused (${reasonText})`);
   }, [isTimerRunning, showToast]);
 
-  // Hook for Smart Auto-Pause
-  useSmartAutoPause({
+  const resetCurrentRunRef = useRef<() => void>(() => {});
+
+  const executeResume = useCallback(() => {
+    isAutoPausedRef.current = false;
+    isPlayingRef.current = true;
+    setIsAutoPaused(false);
+    setAutoPauseReason(null);
+
+    // Resuming reading: If focus timer was paused by auto-pause, resume the timer!
+    if (wasTimerRunningBeforeAutoPauseRef.current && timerSecondsRemaining > 0) {
+      setIsTimerRunning(true);
+      wasTimerRunningBeforeAutoPauseRef.current = false;
+    }
+
+    if (currentIndexRef.current >= totalWordsRef.current - 1) {
+      resetCurrentRunRef.current();
+      handleIndexChange(0);
+    }
+
+    setIsPlaying(true);
+  }, [handleIndexChange, timerSecondsRemaining]);
+
+  // Hook for Smart Auto-Pause (with transition-state play intent queuing)
+  const smartAutoPause = useSmartAutoPause({
     isPlaying,
     enabled: settings.smartAutoPause !== false,
     onAutoPause: handleAutoPause,
+    onResumeQueued: executeResume,
   });
 
   // Phase 6: Canonical Navigation Handler across Overview, Minimap, Jump, & Chapters (Part K)
   const handleNavigateToPosition = useCallback(
     async (target: ResolvedDocumentPosition | { globalWordIndex: number }) => {
       const targetIdx = Math.max(0, target.globalWordIndex);
+      smartAutoPause.cancelQueuedPlay();
       handleIndexChange(targetIdx);
+      isPlayingRef.current = false;
       setIsPlaying(false);
       try {
         await activeDocumentHandle.updateProgress(targetIdx);
@@ -952,46 +1150,109 @@ export default function App() {
         console.warn('Error updating position in handle:', err);
       }
     },
-    [activeDocumentHandle, activeDocId, handleIndexChange, viewMode]
+    [activeDocumentHandle, activeDocId, handleIndexChange, smartAutoPause, viewMode]
   );
 
   const handleStartFromBeginning = useCallback(() => {
     handleNavigateToPosition({ globalWordIndex: 0 });
   }, [handleNavigateToPosition]);
 
+  const handleResumePlay = useCallback(() => {
+    smartAutoPause.consumeRecentQueuedResume();
+    const result = smartAutoPause.requestPlay('click');
+    if (result === 'immediate') {
+      executeResume();
+    }
+  }, [executeResume, smartAutoPause]);
+
+  const handlePlayPointerDown = useCallback(() => {
+    if (isAutoPausedRef.current || !isPlayingRef.current) {
+      smartAutoPause.queuePlayIfTransitioning();
+    }
+  }, [smartAutoPause]);
+
   const handleTogglePlay = useCallback(() => {
+    // If pointerdown already queued and flushed a resume for this exact click gesture,
+    // keep playback running rather than toggling it back to paused.
+    if (smartAutoPause.consumeRecentQueuedResume()) {
+      return;
+    }
+
+    if (isAutoPausedRef.current || !isPlayingRef.current) {
+      const result = smartAutoPause.requestPlay('click');
+      if (result === 'immediate') {
+        executeResume();
+      }
+      return;
+    }
+
+    // Explicit pause by user: cancel any queued play intent and do not auto-resume timer later
+    smartAutoPause.cancelQueuedPlay();
+    wasTimerRunningBeforeAutoPauseRef.current = false;
+    isAutoPausedRef.current = false;
+    isPlayingRef.current = false;
     setIsAutoPaused(false);
     setAutoPauseReason(null);
-    setIsPlaying((prev) => {
-      if (!prev) {
-        // Resuming reading: If focus timer was paused by auto-pause, resume the timer!
-        if (wasTimerRunningBeforeAutoPauseRef.current && timerSecondsRemaining > 0) {
-          setIsTimerRunning(true);
-          wasTimerRunningBeforeAutoPauseRef.current = false;
-        }
-        if (currentIndexRef.current >= totalWordsRef.current - 1) {
-          handleIndexChange(0);
-          return true;
-        }
-        return true;
-      } else {
-        // Explicit pause by user: do not auto-resume timer later
-        wasTimerRunningBeforeAutoPauseRef.current = false;
-        return false;
-      }
+    setIsPlaying(false);
+  }, [executeResume, smartAutoPause]);
+
+  const handleUndoRestart = useCallback(() => {
+    const snapshot = restartUndoRef.current;
+    if (!snapshot || snapshot.documentId !== activeDocId) return;
+
+    restartUndoRef.current = null;
+    setCanUndoRestart(false);
+    setSessionWordsRead(snapshot.previousSessionWordsRead);
+    handleIndexChange(snapshot.previousIndex);
+    showToast(`Restored position (word ${snapshot.previousIndex + 1})`, {
+      durationMs: 3000,
+      bypassDnd: true,
     });
-  }, [handleIndexChange, timerSecondsRemaining]);
+  }, [activeDocId, handleIndexChange, showToast]);
 
   const handleRestart = useCallback(() => {
+    const previousIndex = currentIndexRef.current;
+    const previousSessionWordsRead = sessionWordsReadRef.current;
+
+    smartAutoPause.cancelQueuedPlay();
+    isAutoPausedRef.current = false;
+    isPlayingRef.current = false;
     setIsAutoPaused(false);
     setAutoPauseReason(null);
     setIsPlaying(false);
     setSessionWordsRead(0);
+    resetCurrentRunRef.current();
     handleIndexChange(0);
-  }, [handleIndexChange]);
+
+    if (previousIndex > 0 || previousSessionWordsRead > 0) {
+      restartUndoRef.current = {
+        documentId: activeDocId,
+        previousIndex,
+        previousSessionWordsRead,
+      };
+      setCanUndoRestart(true);
+      showToast(`Restarted from beginning (was at word ${previousIndex + 1})`, {
+        actionLabel: 'Undo',
+        onAction: () => {
+          const snap = restartUndoRef.current;
+          if (!snap || snap.documentId !== activeDocId) return;
+          restartUndoRef.current = null;
+          setCanUndoRestart(false);
+          setSessionWordsRead(snap.previousSessionWordsRead);
+          handleIndexChange(snap.previousIndex);
+          showToast(`Restored position (word ${snap.previousIndex + 1})`, {
+            durationMs: 3000,
+            bypassDnd: true,
+          });
+        },
+        durationMs: 8000,
+        bypassDnd: true,
+      });
+    }
+  }, [activeDocId, handleIndexChange, showToast, smartAutoPause]);
 
   // Fullscreen toggle
-  const handleToggleFullscreen = () => {
+  const handleToggleFullscreen = useCallback(() => {
     if (!document.fullscreenElement) {
       document.documentElement.requestFullscreen().catch(() => {});
       setIsFullscreen(true);
@@ -999,7 +1260,7 @@ export default function App() {
       document.exitFullscreen().catch(() => {});
       setIsFullscreen(false);
     }
-  };
+  }, []);
 
   // Listen to fullscreen changes
   useEffect(() => {
@@ -1010,37 +1271,79 @@ export default function App() {
     return () => document.removeEventListener('fullscreenchange', onFsChange);
   }, []);
 
+  const isAnyModalOpen =
+    isSidebarOpen ||
+    isSettingsOpen ||
+    isShortcutsOpen ||
+    isExtensionHubOpen ||
+    isTimerModalOpen ||
+    isMilestoneModalOpen ||
+    isStatsModalOpen;
+
   // Global Keyboard Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't trigger shortcuts if typing inside input / textarea
-      const target = e.target as HTMLElement;
-      if (
-        target.tagName === 'INPUT' || 
-        target.tagName === 'TEXTAREA' || 
-        target.isContentEditable
-      ) {
-        return;
-      }
+      const action = resolveKeyboardShortcut(extractShortcutKeyEvent(e), {
+        isAnyModalOpen,
+        isShortcutsModalOpen: isShortcutsOpen || isExtensionHubOpen,
+        canUndoRestart,
+      });
 
-      // Universal Input Hub Shortcuts
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'o' || e.key === 'O')) {
-        e.preventDefault();
-        setSidebarActiveTab('input');
-        setIsSidebarOpen(true);
-        return;
-      }
+      if (!action) return;
 
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
-        e.preventDefault();
-        setSidebarActiveTab('input');
-        setIsSidebarOpen(true);
-        return;
-      }
+      switch (action.type) {
+        case 'open_input_hub':
+          e.preventDefault();
+          setSidebarActiveTab('input');
+          setIsSidebarOpen(true);
+          return;
 
-      // Incremental font size adjustments during RSVP or Full Text Flow playback (- to decrease, + or = to increase)
-      if (!e.ctrlKey && !e.metaKey && !e.altKey) {
-        if (e.key === '-' || e.code === 'Minus' || e.code === 'NumpadSubtract') {
+        case 'paste_clipboard':
+          e.preventDefault();
+          setSidebarActiveTab('input');
+          setIsSidebarOpen(true);
+          if (navigator?.clipboard) {
+            (async () => {
+              try {
+                let plain = '';
+                let html = '';
+                if (navigator.clipboard.read) {
+                  try {
+                    const items = await navigator.clipboard.read();
+                    for (const item of items) {
+                      if (item.types.includes('text/html')) {
+                        html = await (await item.getType('text/html')).text();
+                      }
+                      if (item.types.includes('text/plain')) {
+                        plain = await (await item.getType('text/plain')).text();
+                      }
+                    }
+                  } catch {
+                    // Fall back
+                  }
+                }
+                if (!plain && navigator.clipboard.readText) {
+                  plain = await navigator.clipboard.readText();
+                }
+                const extracted = extractClipboardContent(html, plain);
+                const textToUse = (extracted && extracted.trim()) ? extracted.trim() : (plain && plain.trim() ? plain.trim() : '');
+                if (textToUse) {
+                  setPendingDroppedText(textToUse);
+                  showToast('📋 Loaded clipboard text into Universal Input Hub');
+                }
+              } catch {
+                // Ignore clipboard permission failures
+              }
+            })();
+          }
+          return;
+
+        case 'undo_restart':
+          e.preventDefault();
+          handleUndoRestart();
+          return;
+
+        case 'font_decrease':
           e.preventDefault();
           if (viewMode === 'flow') {
             const currentFlowSize = settings.flowFontSize || 22;
@@ -1053,9 +1356,8 @@ export default function App() {
             showToast(`🔤 Font Size: ${nextSize}px`);
           }
           return;
-        }
 
-        if (e.key === '+' || e.key === '=' || e.code === 'NumpadAdd' || (e.shiftKey && e.code === 'Equal')) {
+        case 'font_increase':
           e.preventDefault();
           if (viewMode === 'flow') {
             const currentFlowSize = settings.flowFontSize || 22;
@@ -1068,136 +1370,134 @@ export default function App() {
             showToast(`🔤 Font Size: ${nextSize}px`);
           }
           return;
-        }
-      }
 
-      if (e.code === 'Space') {
-        e.preventDefault();
-        handleTogglePlay();
-      } else if (e.code === 'ArrowLeft') {
-        e.preventDefault();
-        handleIndexChange(Math.max(0, currentIndex - (e.shiftKey ? 1 : 10)));
-      } else if (e.code === 'ArrowRight') {
-        e.preventDefault();
-        handleIndexChange(Math.min(totalWords - 1, currentIndex + (e.shiftKey ? 1 : 10)));
-      } else if (e.code === 'ArrowUp') {
-        e.preventDefault();
-        handleUpdateSettings({ wpm: Math.min(1000, settings.wpm + 25) });
-      } else if (e.code === 'ArrowDown') {
-        e.preventDefault();
-        handleUpdateSettings({ wpm: Math.max(60, settings.wpm - 25) });
-      } else if (e.key === 'r' || e.key === 'R') {
-        handleRestart();
-      } else if (e.key === 'f' || e.key === 'F') {
-        handleToggleFullscreen();
-      } else if (e.key === 'm' || e.key === 'M') {
-        setViewMode((m) => (m === 'rsvp' ? 'flow' : 'rsvp'));
-      } else if (e.key === 's' || e.key === 'S') {
-        handleUpdateSettings({ metronomeSound: !settings.metronomeSound });
-      } else if (e.key === 'v' || e.key === 'V') {
-        handleUpdateSettings({ speechNarration: !settings.speechNarration });
-        showToast(!settings.speechNarration ? '🎙️ Voice-Over Narration Enabled' : '🔇 Voice-Over Narration Disabled');
-      } else if (e.key === 't' || e.key === 'T') {
-        setIsTimerModalOpen((prev) => !prev);
-      } else if (e.key === 'a' || e.key === 'A') {
-        setIsStatsModalOpen((prev) => !prev);
-      } else if (e.key === 'o' || e.key === 'O') {
-        setSidebarActiveTab('overview');
-        setIsSidebarOpen((prev) => !prev);
-      } else if (e.key === 'd' || e.key === 'D') {
-        handleUpdateSettings({ theme: settings.theme === 'light' ? 'midnight' : 'light' });
-      } else if (e.key === '?' || (e.key === '/' && !e.ctrlKey && !e.metaKey)) {
-        e.preventDefault();
-        setExtensionHubInitialTab('shortcuts');
-        setIsExtensionHubOpen((prev) => !prev);
-      } else if (e.code === 'Escape') {
-        setIsSidebarOpen(false);
-        setIsSettingsOpen(false);
-        setIsShortcutsOpen(false);
-        setIsExtensionHubOpen(false);
-        setIsTimerModalOpen(false);
-        setIsStatsModalOpen(false);
+        case 'toggle_play':
+          e.preventDefault();
+          handleTogglePlay();
+          return;
+
+        case 'seek_relative':
+          e.preventDefault();
+          handleIndexChange(Math.max(0, Math.min(totalWords - 1, currentIndex + action.delta)));
+          return;
+
+        case 'wpm_delta':
+          e.preventDefault();
+          handleUpdateSettings({
+            wpm: Math.max(60, Math.min(1000, settings.wpm + action.delta)),
+          });
+          return;
+
+        case 'restart':
+          e.preventDefault();
+          handleRestart();
+          return;
+
+        case 'toggle_fullscreen':
+          handleToggleFullscreen();
+          return;
+
+        case 'toggle_view_mode':
+          setViewMode((m) => (m === 'rsvp' ? 'flow' : 'rsvp'));
+          return;
+
+        case 'toggle_metronome':
+          handleUpdateSettings({ metronomeSound: !settings.metronomeSound });
+          return;
+
+        case 'toggle_narration':
+          handleUpdateSettings({ speechNarration: !settings.speechNarration });
+          showToast(!settings.speechNarration ? '🎙️ Voice-Over Narration Enabled' : '🔇 Voice-Over Narration Disabled');
+          return;
+
+        case 'toggle_timer_modal':
+          setIsTimerModalOpen((prev) => !prev);
+          return;
+
+        case 'toggle_stats_modal':
+          setIsStatsModalOpen((prev) => !prev);
+          return;
+
+        case 'toggle_sidebar_overview':
+          setSidebarActiveTab('overview');
+          setIsSidebarOpen((prev) => !prev);
+          return;
+
+        case 'toggle_theme':
+          handleUpdateSettings({ theme: settings.theme === 'light' ? 'midnight' : 'light' });
+          return;
+
+        case 'toggle_shortcuts':
+          e.preventDefault();
+          setExtensionHubInitialTab('shortcuts');
+          setIsExtensionHubOpen((prev) => !prev);
+          return;
+
+        case 'close_modals':
+          setIsSidebarOpen(false);
+          setIsSettingsOpen(false);
+          setIsShortcutsOpen(false);
+          setIsExtensionHubOpen(false);
+          setIsTimerModalOpen(false);
+          setIsMilestoneModalOpen(false);
+          setIsStatsModalOpen(false);
+          return;
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [
-    handleTogglePlay, 
-    handleIndexChange, 
-    handleRestart, 
-    settings.wpm, 
-    settings.metronomeSound, 
-    settings.speechNarration, 
-    settings.theme, 
+    isAnyModalOpen,
+    isShortcutsOpen,
+    isExtensionHubOpen,
+    canUndoRestart,
+    handleTogglePlay,
+    handleIndexChange,
+    handleRestart,
+    handleUndoRestart,
+    handleToggleFullscreen,
+    settings.wpm,
+    settings.metronomeSound,
+    settings.speechNarration,
+    settings.theme,
     settings.fontSize,
     settings.flowFontSize,
     viewMode,
-    totalWords, 
-    currentIndex, 
-    handleUpdateSettings, 
-    showToast
+    totalWords,
+    currentIndex,
+    handleUpdateSettings,
+    showToast,
   ]);
 
-  const [isIdle, setIsIdle] = useState(false);
-  const idleTimerRef = useRef<NodeJS.Timeout | null>(null);
-
-  const isAnyModalOpen = isSidebarOpen || isSettingsOpen || isShortcutsOpen || isExtensionHubOpen || isTimerModalOpen || isStatsModalOpen;
-
-  const resetIdleTimer = useCallback(() => {
-    setIsIdle(false);
-    if (idleTimerRef.current) {
-      clearTimeout(idleTimerRef.current);
-    }
-    if (isAnyModalOpen) return;
-    idleTimerRef.current = setTimeout(() => {
-      setIsIdle(true);
-    }, 5000);
-  }, [isAnyModalOpen]);
-
-  useEffect(() => {
-    if (isAnyModalOpen) {
-      setIsIdle(false);
-      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
-      return;
-    }
-
-    const handleActivity = () => {
-      resetIdleTimer();
-    };
-
-    window.addEventListener('mousemove', handleActivity, { passive: true });
-    window.addEventListener('mousedown', handleActivity, { passive: true });
-    window.addEventListener('keydown', handleActivity, { passive: true });
-    window.addEventListener('touchstart', handleActivity, { passive: true });
-    window.addEventListener('scroll', handleActivity, { passive: true });
-
-    resetIdleTimer();
-
-    return () => {
-      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
-      window.removeEventListener('mousemove', handleActivity);
-      window.removeEventListener('mousedown', handleActivity);
-      window.removeEventListener('keydown', handleActivity);
-      window.removeEventListener('touchstart', handleActivity);
-      window.removeEventListener('scroll', handleActivity);
-    };
-  }, [resetIdleTimer, isAnyModalOpen]);
+  const isIdle = useControlsIdle({
+    isPlaying,
+    isAnyModalOpen,
+  });
 
   const currentThemeConfig = getTheme(settings.theme);
 
   // Heatmap Dwell Time & Complexity Tracking Engine
-  const { heatmapData, statsSummary, resetHeatmap, clearAllStats } = useReadingHeatmap({
+  const {
+    heatmapData,
+    statsSummary,
+    currentRunStats,
+    resetCurrentRun,
+    resetHeatmap,
+    clearAllStats,
+  } = useReadingHeatmap({
     words: parsedWords,
     totalWords,
     currentIndex,
     isPlaying,
     wpm: settings.wpm,
     documentTitle: currentTitle,
-    isIdle,
+    documentId: activeDocId,
+    isIdle: false,
     isAutoPaused,
     warmupStatus,
   });
+  resetCurrentRunRef.current = resetCurrentRun;
 
   // Smart detection of input text language: Farsi vs English
   const isCurrentTextFarsi = useMemo(() => {
@@ -1213,11 +1513,28 @@ export default function App() {
       id="adhd-reader-app"
       className={`h-screen max-h-screen overflow-hidden flex flex-col ${currentThemeConfig.bgClass} ${currentThemeConfig.textPrimary} transition-colors duration-200 select-none`}
     >
-      {/* Toast Notification for Extension Web Capture */}
+      {/* Toast Notification (with optional Undo action) */}
       {toastNotification && (
-        <div className="fixed top-16 right-4 z-50 flex items-center gap-2.5 px-4 py-2.5 rounded-xl bg-slate-900 border border-red-500/50 text-white shadow-2xl animate-in slide-in-from-top-2 duration-200">
-          <Zap className="w-4 h-4 text-red-500 fill-red-500 animate-pulse" />
-          <span className="text-xs font-semibold">{toastNotification}</span>
+        <div
+          id="app-toast-notification"
+          role="status"
+          aria-live="polite"
+          className="fixed top-16 right-4 z-50 flex items-center gap-3 px-4 py-2.5 rounded-xl bg-slate-900 border border-red-500/50 text-white shadow-2xl animate-in slide-in-from-top-2 duration-200"
+        >
+          <Zap className="w-4 h-4 text-red-500 fill-red-500 animate-pulse shrink-0" />
+          <span className="text-xs font-semibold">{toastNotification.message}</span>
+          {toastNotification.actionLabel && toastNotification.onAction && (
+            <button
+              id="toast-undo-btn"
+              type="button"
+              onClick={toastNotification.onAction}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-red-500 hover:bg-red-400 text-white text-xs font-bold transition-colors cursor-pointer shrink-0"
+              title="Undo restart (Ctrl/Cmd + Z)"
+            >
+              <Undo2 className="w-3.5 h-3.5" />
+              <span>{toastNotification.actionLabel}</span>
+            </button>
+          )}
         </div>
       )}
 
@@ -1274,12 +1591,14 @@ export default function App() {
             onOpenStatsModal={() => setIsStatsModalOpen(true)}
             isAutoPaused={isAutoPaused}
             autoPauseReason={autoPauseReason}
-            onResume={handleTogglePlay}
+            onResume={handleResumePlay}
+            onPlayPointerDown={handlePlayPointerDown}
             warmupStatus={warmupStatus}
             onWordStep={handleWordStep}
             onSkipWarmup={handleSkipWarmup}
             onResetWarmup={handleResetWarmup}
             onSwitchToFlow={() => setViewMode('flow')}
+            actualWpm={currentRunStats.actualWpm}
           />
         ) : (
           <FlowReader
@@ -1303,6 +1622,7 @@ export default function App() {
             onWordStep={handleWordStep}
             onSkipWarmup={handleSkipWarmup}
             onResetWarmup={handleResetWarmup}
+            onPlayPointerDown={handlePlayPointerDown}
           />
         )}
       </main>
@@ -1342,6 +1662,7 @@ export default function App() {
         handle={activeDocumentHandle}
         metadata={activeMetadata}
         structure={activeStructure}
+        totalWords={totalWords}
         currentWordIndex={currentIndex}
         onNavigateToPosition={handleNavigateToPosition}
         onStartFromBeginning={handleStartFromBeginning}
@@ -1412,6 +1733,24 @@ export default function App() {
         onToggleDoNotDisturb={(dnd) => handleUpdateSettings({ doNotDisturb: dnd })}
         theme={currentThemeConfig}
         highlightHex={HIGHLIGHT_COLORS[settings.highlightColor]?.hex || '#ef4444'}
+        onOpenMilestones={() => {
+          setIsTimerModalOpen(false);
+          setIsMilestoneModalOpen(true);
+        }}
+        unlockedMilestonesCount={milestonesData.unlockedMilestoneIds.length}
+      />
+
+      {/* Focus Milestones & Celebration Modal */}
+      <FocusMilestoneModal
+        isOpen={isMilestoneModalOpen}
+        onClose={() => setIsMilestoneModalOpen(false)}
+        milestonesData={milestonesData}
+        newlyUnlockedMilestones={newlyUnlockedMilestones}
+        completedSession={lastCelebratedSession}
+        theme={currentThemeConfig}
+        highlightHex={HIGHLIGHT_COLORS[settings.highlightColor]?.hex || '#ef4444'}
+        onStartBreak={handleStartBreak}
+        onStartNextBlock={handleStartNextBlock}
       />
 
       {/* Reading Statistics & Heatmap Analytics Modal */}

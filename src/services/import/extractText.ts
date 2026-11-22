@@ -1,7 +1,7 @@
 import { ReaderDocument, InputSourceType } from '../../types';
 import { detectInputType, isUrlString, isMarkdownString } from './detectInput';
 import { extractTxt } from './extractTxt';
-import { extractMarkdown } from './extractMarkdown';
+import { extractMarkdown, cleanMarkdownContent } from './extractMarkdown';
 import { extractPdf } from './extractPdf';
 import { extractUrl } from './extractUrl';
 import { normalizeText, extractSuggestedTitle, detectTextDirection, countWords } from '../../utils/normalizeText';
@@ -10,36 +10,25 @@ import { measureDevAsyncTiming } from '../../utils/performanceDiagnostics';
 export type ProgressCallback = (percent: number, message: string) => void;
 
 /**
- * Cleanly extracts readable text from rich HTML or plain text from clipboard.
+ * Cleanly extracts readable text from rich HTML or plain text from clipboard,
+ * preserving Markdown formatting (headings, blockquotes, code, lists, bold).
  */
 export function extractClipboardContent(html?: string, plainText?: string): string {
-  if (typeof DOMParser !== 'undefined' && html && html.includes('<') && html.includes('>')) {
-    try {
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(html, 'text/html');
-      
-      // Remove scripts, styles, etc.
-      doc.querySelectorAll('script, style, noscript, svg').forEach((el) => el.remove());
-      
-      // Replace breaks and paragraphs with newlines
-      doc.querySelectorAll('br, p, div, h1, h2, h3, h4, h5, h6, li, tr').forEach((el) => {
-        el.insertAdjacentText('afterend', '\n');
-      });
+  // 1. If plainText contains Markdown syntax, preserve it faithfully
+  if (plainText && isMarkdownString(plainText)) {
+    return cleanMarkdownContent(plainText);
+  }
 
-      const text = doc.body?.textContent || '';
-      if (text && text.trim().length > 10) {
-        return normalizeText(text);
+  // 2. If rich HTML is provided from browser copy, convert structural HTML to clean Markdown
+  if (html && html.includes('<') && html.includes('>')) {
+    try {
+      const converted = cleanMarkdownContent(html);
+      if (converted && converted.trim().length > 10) {
+        return converted;
       }
     } catch {
       // Fall through to plain text
     }
-  } else if (html && html.includes('<') && html.includes('>')) {
-    // Clean regex strip fallback for Node/non-DOM environments
-    let stripped = html.replace(/<(script|style|noscript)[^>]*>[\s\S]*?<\/\1>/gi, '');
-    stripped = stripped.replace(/<br\s*\/?>/gi, '\n');
-    stripped = stripped.replace(/<\/(p|div|h[1-6]|li|tr)>/gi, '\n');
-    stripped = stripped.replace(/<[^>]+>/g, '');
-    return normalizeText(stripped);
   }
 
   return normalizeText(plainText || '');

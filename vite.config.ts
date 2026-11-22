@@ -79,6 +79,7 @@ export default defineConfig(() => {
       dedupe: ['react', 'react-dom', 'react-dom/client'],
     },
     optimizeDeps: {
+      entries: ['index.html'],
       include: [
         'react',
         'react-dom',

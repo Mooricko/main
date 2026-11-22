@@ -17,7 +17,7 @@ import {
   InputSourceType,
 } from '../../types';
 import { countWordsFast } from '../../utils/textParser';
-import { markdownToReadableText } from '../import/extractMarkdown';
+import { markdownToReadableText, cleanMarkdownContent } from '../import/extractMarkdown';
 import { normalizeText } from '../../utils/normalizeText';
 
 export interface PdfOutlineItem {
@@ -259,12 +259,12 @@ export function buildMarkdownStructure(
   structure: DocumentStructure;
   normalizedText: string;
 } {
-  const normalizedText = markdownToReadableText(markdown);
+  const normalizedText = cleanMarkdownContent(markdown);
   const chapters: StructuralNode[] = [];
   const sections: StructuralNode[] = [];
 
   // Parse markdown line by line to locate headings with exact prose word offsets
-  const lines = markdown.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  const lines = normalizedText.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
   
   interface HeadingMatch {
     level: number;
@@ -311,7 +311,6 @@ export function buildMarkdownStructure(
 
   if (headings.length > 0) {
     // Map each heading to its exact word index using single-pass segment traversal
-    // Avoids repeatedly converting entire prefixes slice(0, h) to readable text
     const headingWordIndices: number[] = [];
     let prevLineIndex = 0;
     let runningWordCount = 0;
@@ -320,15 +319,13 @@ export function buildMarkdownStructure(
       const heading = headings[h];
       if (heading.lineIndex > prevLineIndex) {
         const segment = lines.slice(prevLineIndex, heading.lineIndex).join('\n');
-        const segmentProse = markdownToReadableText(segment);
-        runningWordCount += countWordsFast(segmentProse);
+        runningWordCount += countWordsFast(segment);
       }
       headingWordIndices.push(runningWordCount);
 
       // Account for the heading line itself in the running word count
       const headingLine = lines[heading.lineIndex];
-      const headingProse = markdownToReadableText(headingLine);
-      runningWordCount += countWordsFast(headingProse);
+      runningWordCount += countWordsFast(headingLine);
 
       prevLineIndex = heading.lineIndex + 1;
     }

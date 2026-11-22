@@ -11,7 +11,7 @@
 
 import { normalizeText, detectTextDirection, countWords, extractSuggestedTitle } from '../../../utils/normalizeText';
 import { detectInputType, isUrlString, isMarkdownString, getFileExtension } from '../detectInput';
-import { markdownToReadableText, extractMarkdown } from '../extractMarkdown';
+import { markdownToReadableText, extractMarkdown, cleanMarkdownContent } from '../extractMarkdown';
 import { extractTxt } from '../extractTxt';
 import { parseHtmlArticle, formatValidUrl, fetchUrlPreview, isWikipediaUrl } from '../extractUrl';
 import { extractClipboardContent, processUniversalInput } from '../extractText';
@@ -138,7 +138,82 @@ const focus = true;
     assert(!persianProse.includes('**'), 'No remaining markdown symbols in Persian text');
   }
 
-  // 4. TXT EXTRACTION TESTS
+  // 3B. CLEAN MARKDOWN STRUCTURAL ELEMENTS & INLINE ACCENTS
+  console.log('\n--- 3B. Clean Markdown Conversion of Structure & Inline Accents ---');
+  {
+    // Structural Elements: Headings H1-H4 from HTML and setext
+    const htmlHeadings = '<h1>Main Title</h1><p>Intro</p><h2>Section One</h2><h3>Subsection</h3><h4>Minor Point</h4>';
+    const cleanHeadings = cleanMarkdownContent(htmlHeadings);
+    assert(cleanHeadings.includes('# Main Title'), 'Converts <h1> to # Heading 1');
+    assert(cleanHeadings.includes('## Section One'), 'Converts <h2> to ## Heading 2');
+    assert(cleanHeadings.includes('### Subsection'), 'Converts <h3> to ### Heading 3');
+    assert(cleanHeadings.includes('#### Minor Point'), 'Converts <h4> to #### Heading 4');
+
+    const setextHeadings = 'Setext Heading 1\n====\nParagraph\nSetext Heading 2\n----';
+    const cleanSetext = cleanMarkdownContent(setextHeadings);
+    assert(cleanSetext.includes('# Setext Heading 1'), 'Converts setext === to # Heading 1');
+    assert(cleanSetext.includes('## Setext Heading 2'), 'Converts setext --- to ## Heading 2');
+
+    // Structural Elements: Blockquotes and Callouts
+    const htmlQuote = '<blockquote>Simplicity is prerequisite for reliability.</blockquote>';
+    const cleanQuote = cleanMarkdownContent(htmlQuote);
+    assert(cleanQuote.includes('> Simplicity is prerequisite for reliability.'), 'Converts <blockquote> to > Blockquote');
+
+    const htmlCallout = '<div class="callout callout-tip">Take a 5-minute break every 25 minutes.</div>';
+    const cleanCallout = cleanMarkdownContent(htmlCallout);
+    assert(cleanCallout.includes('> [!TIP]'), 'Converts HTML tip callout to > [!TIP]');
+    assert(cleanCallout.includes('Take a 5-minute break'), 'Preserves callout message');
+
+    const unspacedCallout = '>[!note] Remember to drink water.';
+    const standardizedCallout = cleanMarkdownContent(unspacedCallout);
+    assert(standardizedCallout.includes('> [!NOTE]'), 'Standardizes >[!note] to > [!NOTE]');
+
+    // Structural Elements: Code Blocks
+    const htmlPreCode = '<pre><code class="language-typescript">const answer = 42;\nif (answer &gt; 40) { return true; }</code></pre>';
+    const cleanCode = cleanMarkdownContent(htmlPreCode);
+    assert(cleanCode.includes('```typescript'), 'Preserves code block language');
+    assert(cleanCode.includes('const answer = 42;'), 'Preserves inner code');
+    assert(cleanCode.includes('answer > 40'), 'Decodes HTML entities in code block');
+    assert(cleanCode.includes('```'), 'Fences code block properly');
+
+    // Structural Elements: Lists (Unordered and Ordered)
+    const htmlUl = '<ul><li>First item</li><li>Second item</li></ul>';
+    const cleanUl = cleanMarkdownContent(htmlUl);
+    assert(cleanUl.includes('- First item') && cleanUl.includes('- Second item'), 'Converts <ul><li> to standard - list items');
+
+    const htmlOl = '<ol><li>Step one</li><li>Step two</li><li>Step three</li></ol>';
+    const cleanOl = cleanMarkdownContent(htmlOl);
+    assert(cleanOl.includes('1. Step one'), 'Converts <ol><li> to sequential 1. Item');
+    assert(cleanOl.includes('2. Step two'), 'Converts <ol><li> to sequential 2. Item');
+    assert(cleanOl.includes('3. Step three'), 'Converts <ol><li> to sequential 3. Item');
+
+    const mixedBullets = '• Bullet item\n* Asterisk item\n+ Plus item';
+    const cleanBullets = cleanMarkdownContent(mixedBullets);
+    assert(cleanBullets.includes('- Bullet item'), 'Normalizes • to -');
+    assert(cleanBullets.includes('- Asterisk item'), 'Normalizes * to -');
+    assert(cleanBullets.includes('- Plus item'), 'Normalizes + to -');
+
+    // Structural Elements: Horizontal Rules
+    const htmlHr = '<p>Before</p><hr><p>After</p>';
+    const cleanHr = cleanMarkdownContent(htmlHr);
+    assert(cleanHr.includes('---'), 'Converts <hr> to ---');
+
+    // Inline Accents: Bold, Italic, Inline Code, Strikethrough
+    const inlineHtml = '<p>This is <strong>strong bold</strong>, <b>b tag bold</b>, <em>emphasized</em>, <i>italic</i>, <code>const x = 1;</code>, and <del>deleted strike</del>.</p>';
+    const cleanInline = cleanMarkdownContent(inlineHtml);
+    assert(cleanInline.includes('**strong bold**'), 'Converts <strong> to **bold**');
+    assert(cleanInline.includes('**b tag bold**'), 'Converts <b> to **bold**');
+    assert(cleanInline.includes('*emphasized*'), 'Converts <em> to *italic*');
+    assert(cleanInline.includes('*italic*'), 'Converts <i> to *italic*');
+    assert(cleanInline.includes('`const x = 1;`'), 'Converts <code> to `inline_code`');
+    assert(cleanInline.includes('~~deleted strike~~'), 'Converts <del> to ~~strike~~');
+
+    const inlineMdUnderscores = 'Here is __bold text__ and _italic text_ and ~~strikethrough~~.';
+    const cleanMdUnderscores = cleanMarkdownContent(inlineMdUnderscores);
+    assert(cleanMdUnderscores.includes('**bold text**'), 'Normalizes __bold__ to **bold**');
+    assert(cleanMdUnderscores.includes('*italic text*'), 'Normalizes _italic_ to *italic*');
+    assert(cleanMdUnderscores.includes('~~strikethrough~~'), 'Preserves ~~strikethrough~~');
+  }
   console.log('\n--- 4. TXT Document Extraction ---');
   {
     const sampleTxt = 'Chapter 1: The Beginning\r\n\r\nOnce upon a time in a focused mind...';
@@ -200,11 +275,17 @@ const focus = true;
     const richHtml = `<p>This is from <b>rich clipboard</b> with <a href="#">a link</a>.</p>`;
     const plain = `This is from rich clipboard with a link.`;
     const extracted = extractClipboardContent(richHtml, plain);
-    assert(extracted.includes('This is from rich clipboard with a link.'), 'Extracts clean text from rich HTML clipboard');
+    assert(extracted.includes('This is from') && (extracted.includes('rich clipboard with a link') || extracted.includes('**rich clipboard**')), 'Extracts clean text or markdown from rich HTML clipboard');
     assert(!extracted.includes('<p>') && !extracted.includes('<b>'), 'Strips HTML markup from clipboard');
 
     const purePlain = extractClipboardContent(undefined, 'Just plain copied text.');
     assert(purePlain === 'Just plain copied text.', 'Extracts plain text when HTML not provided');
+
+    // Markdown copied to clipboard preserves formatting
+    const mdClipboard = extractClipboardContent(undefined, '# Title\n\n- Item 1\n- Item 2\n\n**Bold claim**');
+    assert(mdClipboard.includes('# Title'), 'Preserves heading in clipboard markdown');
+    assert(mdClipboard.includes('**Bold claim**'), 'Preserves bold in clipboard markdown');
+    assert(mdClipboard.includes('- Item 1'), 'Preserves lists in clipboard markdown');
   }
 
   // 7. MASTER UNIFIED PIPELINE INTEGRATION
@@ -216,12 +297,12 @@ const focus = true;
     assert(plainDoc.content === 'Focus flows where attention goes.', 'Preserves content in ReaderDocument');
     assert(typeof plainDoc.id === 'string', 'Assigns unique ID');
 
-    // Markdown input auto-detected
+    // Markdown input auto-detected and formatting faithfully preserved
     const mdInput = '# Chapter 1\nThis is a **markdown** text with [links](http://a.com).';
     const mdDoc = await processUniversalInput(mdInput);
     assert(mdDoc.sourceType === 'markdown', 'Auto-detects markdown in unified pipeline');
-    assert(!mdDoc.content.includes('**'), 'Markdown formatting normalized');
-    assert(mdDoc.content.includes('markdown text with links.'), 'Clean prose output');
+    assert(mdDoc.content.includes('# Chapter 1'), 'Preserves heading marker in markdown document');
+    assert(mdDoc.content.includes('**markdown** text with links.'), 'Preserves bold markdown syntax and link text');
 
     // Persian text in pipeline
     const farsiDoc = await processUniversalInput('خواندن با ریتم متناسب باعث افزایش تمرکز می‌شود.');

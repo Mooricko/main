@@ -1,6 +1,6 @@
 import { ReaderDocument, UrlPreviewData } from '../../types';
 import { normalizeText, detectTextDirection, countWords, extractSuggestedTitle } from '../../utils/normalizeText';
-import { markdownToReadableText } from './extractMarkdown';
+import { cleanMarkdownContent, markdownToReadableText } from './extractMarkdown';
 
 export type UrlProgressCallback = (progressPercent: number, statusMessage: string) => void;
 
@@ -113,42 +113,22 @@ export function parseHtmlArticle(html: string, originalUrl?: string): { title: s
     throw new Error('Unable to parse the content of this webpage.');
   }
 
-  // 5. Extract readable elements in order
-  const elements = rootElement.querySelectorAll('h1, h2, h3, h4, h5, h6, p, blockquote, ul, ol, li');
-  const textBlocks: string[] = [];
-
-  elements.forEach((el) => {
-    const tagName = el.tagName.toLowerCase();
-    const text = el.textContent?.trim();
-    if (!text || text.length < 2) return;
-
-    if (tagName.startsWith('h')) {
-      textBlocks.push(`\n${text}\n`);
-    } else if (tagName === 'blockquote') {
-      textBlocks.push(`"${text}"`);
-    } else if (tagName === 'li') {
-      textBlocks.push(`• ${text}`);
-    } else if (tagName === 'p') {
-      textBlocks.push(text);
-    }
-  });
-
-  let extractedText = textBlocks.join('\n\n');
+  // 5. Convert readable elements to clean Markdown format
+  let rawContent = rootElement.innerHTML;
+  let extractedMarkdown = cleanMarkdownContent(rawContent);
 
   // If structured extraction was too sparse, fallback to clean root textContent
-  if (extractedText.trim().length < 50) {
-    extractedText = rootElement.textContent || '';
+  if (extractedMarkdown.trim().length < 50) {
+    extractedMarkdown = cleanMarkdownContent(rootElement.textContent || '');
   }
 
-  const normalized = normalizeText(extractedText);
-
-  if (!normalized || normalized.length < 30) {
+  if (!extractedMarkdown || extractedMarkdown.length < 30) {
     throw new Error("Couldn't extract readable article text from this page.");
   }
 
   return {
     title: title || originalUrl || 'Web Article',
-    content: normalized,
+    content: extractedMarkdown,
     author,
   };
 }
@@ -334,7 +314,7 @@ export async function extractUrl(
   // If we received markdown (from reader API):
   if (markdownText) {
     onProgress?.(85, 'Cleaning article text...');
-    const content = markdownToReadableText(markdownText);
+    const content = cleanMarkdownContent(markdownText);
     const title = extractSuggestedTitle(content) || (wikiInfo ? wikiInfo.title.replace(/_/g, ' ') : 'Imported Article');
     const wordCount = countWords(content);
     const direction = detectTextDirection(content);

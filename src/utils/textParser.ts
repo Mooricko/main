@@ -438,15 +438,10 @@ export function splitWordParts(token: string, style: HighlightStyle = 'middle-tw
   const suffixPunct = trailingMatch ? trailingMatch[0] : '';
   const coreWord = remainingAfterPrefix.slice(0, remainingAfterPrefix.length - suffixPunct.length);
 
-  // Fast check: only run RTL regex if token has characters in RTL range (>= 0x0590)
-  let isRtl = false;
-  if (token.length > 0) {
-    const firstCode = token.charCodeAt(0);
-    const lastCode = token.charCodeAt(token.length - 1);
-    if (firstCode >= 0x0590 || lastCode >= 0x0590) {
-      isRtl = isRtlText(token);
-    }
-  }
+  // Check if token or coreWord contains RTL characters (Persian, Arabic, Hebrew).
+  // Check coreWord as well as token so Markdown formatting (**, *, `, #, _, ~)
+  // or quotes/brackets (ASCII < 0x0590) do not mask RTL letters.
+  const isRtl = Boolean((coreWord && isRtlText(coreWord)) || isRtlText(token));
 
   // Check punctuation types for smart pauses (including Persian punctuation: '۔', '؟', '،', '؛')
   const hasSentenceEnd = /[.!?…۔؟]+/.test(suffixPunct);

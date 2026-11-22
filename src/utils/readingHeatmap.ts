@@ -123,6 +123,7 @@ export function generateReadingHeatmap(
 
   const baselineWordMs = (60 / Math.max(60, wpm)) * 1000;
   const rawBucketDwells: number[] = new Array(bucketCount).fill(0);
+  const recordedBucketDwells: number[] = new Array(bucketCount).fill(0);
   const bucketWordCounts: number[] = new Array(bucketCount).fill(0);
   let totalDwellMs = 0;
 
@@ -134,9 +135,10 @@ export function generateReadingHeatmap(
     const lexicalBonus = wordObj ? calculateLexicalComplexity(wordObj) * baselineWordMs * 0.4 : 0;
     
     // Total effective dwell incorporates actual reader time plus baseline structure
-    const effectiveDwell = recordedDwell > 0 ? recordedDwell + lexicalBonus * 0.2 : lexicalBonus * 0.5;
+    const effectiveDwell = recordedDwell > 0 ? recordedDwell + lexicalBonus * 0.2 : 0;
     
     rawBucketDwells[bIndex] += effectiveDwell;
+    recordedBucketDwells[bIndex] += recordedDwell;
     bucketWordCounts[bIndex] += 1;
     totalDwellMs += recordedDwell;
   }
@@ -147,7 +149,7 @@ export function generateReadingHeatmap(
     return total / count;
   });
 
-  // Determine minimum and maximum values for normalization
+  // Determine minimum and maximum values for normalization across read buckets
   const validDwells = avgDwellPerWord.filter((v) => v > 0);
   const minDwell = validDwells.length > 0 ? Math.min(...validDwells) : baselineWordMs * 0.5;
   const maxDwell = validDwells.length > 0 ? Math.max(...validDwells) : baselineWordMs * 2;
@@ -163,11 +165,12 @@ export function generateReadingHeatmap(
     const endWord = Math.min(totalWords - 1, Math.floor((b + 1) * wordsPerBucket) - 1);
     const progressPercent = Math.round(((b + 1) / bucketCount) * 100);
     const isCurrent = currentIndex >= startWord && currentIndex <= endWord;
-    const isRead = currentIndex >= startWord || (rawBucketDwells[b] > baselineWordMs * 0.3);
+    const recordedBucketMs = recordedBucketDwells[b];
+    const isRead = recordedBucketMs > 0 || (totalDwellMs > 0 && currentIndex >= startWord);
 
     // Calculate relative intensity (0.0 to 1.0)
     const currentAvgDwell = avgDwellPerWord[b];
-    let intensity = (currentAvgDwell - minDwell) / dwellSpread;
+    let intensity = recordedBucketMs > 0 ? (currentAvgDwell - minDwell) / dwellSpread : 0;
     intensity = Math.max(0, Math.min(1, intensity));
 
     // Determine complexity level
@@ -209,8 +212,8 @@ export function generateReadingHeatmap(
       startWord,
       endWord,
       progressPercent,
-      dwellTimeMs: Math.round(rawBucketDwells[b]),
-      visitCount: Math.round(rawBucketDwells[b] / Math.max(100, baselineWordMs)),
+      dwellTimeMs: Math.round(recordedBucketMs),
+      visitCount: recordedBucketMs > 0 ? Math.max(1, Math.round(recordedBucketMs / Math.max(100, baselineWordMs))) : 0,
       relativeIntensity: intensity,
       color,
       isCurrent,

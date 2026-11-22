@@ -633,6 +633,7 @@ const FACE_PRESSED =
 export interface MetallicButtonProps {
   label?: string;
   onClick?: () => void;
+  onPointerDown?: (e: React.PointerEvent<HTMLButtonElement>) => void;
   viewMode?: "text" | "icon";
   className?: string;
   baseColor?: string;
@@ -658,6 +659,7 @@ export interface MetallicButtonProps {
 export function MetallicButton({
   label = "Get Started",
   onClick,
+  onPointerDown,
   viewMode = "text",
   className = "",
   baseColor = "#000000",
@@ -860,6 +862,8 @@ export function MetallicButton({
   const handleKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
+      e.stopPropagation();
+      if (e.repeat) return;
       onClick?.();
     }
   };
@@ -938,6 +942,7 @@ export function MetallicButton({
             id={id}
             type="button"
             onClick={handleClick}
+            onPointerDown={onPointerDown}
             onKeyDown={handleKeyDown}
             onMouseEnter={handleMouseEnter}
             onMouseLeave={handleMouseLeave}

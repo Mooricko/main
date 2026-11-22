@@ -39,6 +39,7 @@ import { InputHub } from './InputHub/InputHub';
 import { SAMPLE_TEXTS } from '../data/sampleTexts';
 import { isRtlText } from '../utils/textParser';
 import { documentStorageService } from '../services/document/documentStorageService';
+import { resolveOverviewStats } from '../services/document/overviewStats';
 
 /**
  * Formats a date to the required display format:
@@ -76,6 +77,7 @@ interface DocumentSidebarProps {
   handle?: ReaderDocumentHandle | null;
   metadata?: DocumentMetadata | null;
   structure?: DocumentStructure | null;
+  totalWords?: number;
   currentWordIndex: number;
   onNavigateToPosition: (resolved: ResolvedDocumentPosition | { globalWordIndex: number }) => void;
   onStartFromBeginning: () => void;
@@ -111,6 +113,7 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = ({
   handle,
   metadata,
   structure,
+  totalWords: fallbackTotalWords,
   currentWordIndex,
   onNavigateToPosition,
   onStartFromBeginning,
@@ -155,16 +158,25 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = ({
     };
   }, [isOpen, documentId, handle, currentWordIndex]);
 
-  const totalWords = metadata?.totalWords || 0;
-  const pageCount = metadata?.pageCount || structure?.pages?.length || 0;
-  const sourceType = metadata?.sourceType || 'text';
-  const displayTitle = metadata?.title || currentTitle || 'Document Overview';
+  const overviewStats = resolveOverviewStats({
+    documentId,
+    metadata,
+    structure,
+    savedDocuments,
+    fallbackTotalWords,
+    currentTitle,
+  });
+
+  const totalWords = overviewStats.totalWords;
+  const pageCount = overviewStats.pageCount;
+  const sourceType = overviewStats.sourceType;
+  const displayTitle = overviewStats.displayTitle;
   const chapters = structure?.chapters || [];
 
   const sizeInfo = classifyDocumentSize({
     totalWords,
     pageCount,
-    totalCharacters: metadata?.totalCharacters,
+    totalCharacters: overviewStats.totalCharacters,
     sourceType,
   });
 
@@ -284,6 +296,8 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = ({
       id: historyItem.id,
       sourceType: historyItem.sourceType || 'text',
       title: historyItem.title,
+      sourceUrl: historyItem.sourceUrl,
+      fileName: historyItem.fileName,
       content,
       direction: historyItem.direction || (isRtlText(content) ? 'rtl' : 'ltr'),
       metadata: {
@@ -312,7 +326,7 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = ({
           title="Open Sources & Text Input Hub"
           aria-label="Open Sources & Text Input Hub"
           className={`fixed left-0 top-20 -mt-[7px] z-30 flex items-center gap-2 pl-2.5 pr-3 py-2 rounded-r-xl border-y border-r ${theme.borderClass} ${theme.cardBgClass} ${theme.textPrimary} shadow-xl hover:translate-x-1 active:translate-x-0 transition-all duration-300 backdrop-blur-md group ${
-            isIdle ? 'opacity-0 -translate-x-4 pointer-events-none' : 'opacity-100 translate-x-0'
+            isIdle ? 'opacity-0' : 'opacity-100'
           }`}
         >
           <div className="flex items-center gap-1.5">
@@ -673,6 +687,11 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = ({
                         <h4 className="text-xs sm:text-sm font-semibold text-slate-200 group-hover:text-red-400 transition-colors truncate">
                           {doc.title}
                         </h4>
+                        {doc.excerpt && (
+                          <p className="text-[11px] text-slate-500 mt-0.5 truncate">
+                            {doc.excerpt}
+                          </p>
+                        )}
                         <p className="text-[11px] text-slate-400 mt-0.5 flex items-center gap-2">
                           <span>{doc.wordCount} words</span>
                           <span>•</span>

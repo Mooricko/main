@@ -6,7 +6,7 @@
  * titles, word counts, categories, and reading indices.
  */
 
-import { SavedDocument } from '../../types';
+import { DocumentMetadata, SavedDocument } from '../../types';
 import { safeStorage } from '../../utils/safeStorage';
 import { documentStorageService } from './documentStorageService';
 import { detectTextDirection } from '../../utils/normalizeText';
@@ -88,8 +88,8 @@ export async function migrateLocalStorageToIndexedDB(): Promise<MigrationResult>
                   id: sampleMatch.id,
                   title: sampleMatch.title,
                   text: sampleMatch.text,
-                  sourceType: 'text',
-                  direction: detectTextDirection(sampleMatch.text),
+                  sourceType: sampleMatch.sourceType || 'text',
+                  direction: sampleMatch.direction || detectTextDirection(sampleMatch.text),
                   category: sampleMatch.category,
                   lastReadWordIndex: doc.lastReadIndex || 0,
                 });
@@ -152,8 +152,8 @@ export async function migrateLocalStorageToIndexedDB(): Promise<MigrationResult>
             id: sample.id,
             title: sample.title,
             text: sample.text,
-            sourceType: 'text',
-            direction: detectTextDirection(sample.text),
+            sourceType: sample.sourceType || 'text',
+            direction: sample.direction || detectTextDirection(sample.text),
             category: sample.category,
             lastReadWordIndex: 0,
           });
@@ -177,4 +177,37 @@ export async function migrateLocalStorageToIndexedDB(): Promise<MigrationResult>
       clearedLegacyBytes,
     };
   }
+}
+
+/**
+ * Ensures a built-in sample document is persisted in IndexedDB when requested
+ * as the active document (for example, on default startup even when other
+ * documents already exist in storage).
+ */
+export async function ensureSampleDocumentInStorage(
+  docId: string
+): Promise<DocumentMetadata | null> {
+  if (!docId) return null;
+
+  const existing = await documentStorageService.getMetadata(docId);
+  if (existing) {
+    return existing;
+  }
+
+  const sample = SAMPLE_TEXTS.find((item) => item.id === docId);
+  if (!sample || !sample.text) {
+    return null;
+  }
+
+  const { metadata } = await documentStorageService.createAndSaveDocument({
+    id: sample.id,
+    title: sample.title,
+    text: sample.text,
+    sourceType: sample.sourceType || 'text',
+    direction: sample.direction || detectTextDirection(sample.text),
+    category: sample.category,
+    lastReadWordIndex: sample.lastReadIndex || 0,
+  });
+
+  return metadata;
 }

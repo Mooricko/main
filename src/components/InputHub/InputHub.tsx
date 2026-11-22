@@ -14,7 +14,7 @@ import { ReaderSettings, ReaderDocument, SavedDocument, ImportState } from '../.
 import { DropZone } from './DropZone';
 import { UrlInput } from './UrlInput';
 import { ImportStatus } from './ImportStatus';
-import { processUniversalInput } from '../../services/import/extractText';
+import { processUniversalInput, extractClipboardContent } from '../../services/import/extractText';
 import { isUrlString, isMarkdownString } from '../../services/import/detectInput';
 import { calculateTextStats, isRtlText } from '../../utils/textParser';
 import { classifyDocumentScale } from '../../utils/performanceDiagnostics';
@@ -290,18 +290,44 @@ export const InputHub: React.FC<InputHubProps> = ({
     handleProcessInput(url, 'url');
   };
 
-  // Direct paste button from system clipboard
+  // Direct paste button from system clipboard - supports raw Markdown & rich clipboard
   const handlePasteClipboard = async () => {
     try {
-      const text = await navigator.clipboard.readText();
-      if (text && text.trim()) {
-        const trimmed = text.trim();
-        if (isUrlString(trimmed)) {
-          setUrlInputValue(trimmed);
+      let plainText = '';
+      let htmlText = '';
+
+      if (navigator.clipboard && navigator.clipboard.read) {
+        try {
+          const items = await navigator.clipboard.read();
+          for (const item of items) {
+            if (item.types.includes('text/html')) {
+              const blob = await item.getType('text/html');
+              htmlText = await blob.text();
+            }
+            if (item.types.includes('text/plain')) {
+              const blob = await item.getType('text/plain');
+              plainText = await blob.text();
+            }
+          }
+        } catch {
+          // Some browsers restrict clipboard.read(), fall back to readText()
+        }
+      }
+
+      if (!plainText && navigator.clipboard && navigator.clipboard.readText) {
+        plainText = await navigator.clipboard.readText();
+      }
+
+      const extracted = extractClipboardContent(htmlText, plainText);
+      const textToUse = (extracted && extracted.trim()) ? extracted.trim() : (plainText && plainText.trim() ? plainText.trim() : '');
+
+      if (textToUse) {
+        if (isUrlString(textToUse)) {
+          setUrlInputValue(textToUse);
           setCopySuccess(true);
           setTimeout(() => setCopySuccess(false), 2000);
         } else {
-          setPastedText(trimmed);
+          setPastedText(textToUse);
           setCopySuccess(true);
           setTimeout(() => setCopySuccess(false), 2000);
         }
@@ -309,6 +335,34 @@ export const InputHub: React.FC<InputHubProps> = ({
     } catch {
       // Clipboard permission denied: focus the textarea
       textareaRef.current?.focus();
+    }
+  };
+
+  // Convert rich clipboard to markdown or preserve pasted markdown cleanly in textarea
+  const handleTextareaPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const plain = e.clipboardData?.getData('text/plain') || '';
+    const html = e.clipboardData?.getData('text/html') || '';
+
+    // If plain text already has markdown syntax, allow native paste
+    if (plain && isMarkdownString(plain)) {
+      return;
+    }
+
+    // If plain text doesn't have markdown, but clipboard contains rich HTML structure (headings, quotes, lists, bold)
+    if (html && (html.includes('<h1') || html.includes('<h2') || html.includes('<h3') || html.includes('<blockquote') || html.includes('<ul') || html.includes('<ol') || html.includes('<pre') || html.includes('<strong>') || html.includes('<b>'))) {
+      const convertedMd = extractClipboardContent(html, plain);
+      if (convertedMd && isMarkdownString(convertedMd)) {
+        e.preventDefault();
+        const textarea = e.currentTarget;
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        const current = pastedText;
+        const next = current.substring(0, start) + convertedMd + current.substring(end);
+        setPastedText(next);
+        setTimeout(() => {
+          textarea.selectionStart = textarea.selectionEnd = start + convertedMd.length;
+        }, 0);
+      }
     }
   };
 
@@ -430,6 +484,7 @@ export const InputHub: React.FC<InputHubProps> = ({
                   ref={textareaRef}
                   value={pastedText}
                   onChange={(e) => setPastedText(e.target.value)}
+                  onPaste={handleTextareaPaste}
                   dir={isRtl ? 'rtl' : 'ltr'}
                   rows={6}
                   disabled={isProcessing}

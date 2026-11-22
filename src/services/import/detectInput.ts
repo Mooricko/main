@@ -41,7 +41,7 @@ export function isUrlString(input: string): boolean {
  * Checks if a string contains prominent Markdown syntax patterns.
  */
 export function isMarkdownString(input: string): boolean {
-  if (!input) return false;
+  if (!input || !input.trim()) return false;
 
   // For large documents, sampling the first 16,000 characters gives high accuracy
   // without repeatedly scanning hundreds of thousands of characters with complex regexes.
@@ -49,28 +49,24 @@ export function isMarkdownString(input: string): boolean {
 
   const patterns = [
     /^#{1,6}\s+[^\n]+/m, // # Heading
-    /\[.+?\]\(https?:\/\/[^\s)]+\)/, // [link](url)
-    /```[\s\S]*?```/, // Code block
-    /`[^`\n]+`/, // Inline code
+    /```[\s\S]*?```/, // Fenced Code block
+    /^```[a-zA-Z0-9_-]*/m, // Code fence
+    /^\s*>\s*[^\n]+/m, // Blockquote
+    /\[!(NOTE|TIP|WARNING|IMPORTANT)\]/i, // Callouts / Admonitions
     /^\s*[-*+]\s+[^\n]+/m, // Unordered list
-    /^\s*\d+\.\s+[^\n]+/m, // Ordered list
-    /^\s*>\s+[^\n]+/m, // Blockquote
+    /^\s*\d+[\.\)]\s+[^\n]+/m, // Ordered list
     /\*\*[^*\n]+\*\*/, // **bold**
     /__[^_\n]+__/, // __bold__
+    /`[^`\n]+`/, // `inline code`
+    /^\s*[-*_]{3,}\s*$/m, // Horizontal rule
+    /\[.+?\]\(https?:\/\/[^\s)]+\)/, // [link](url)
     /\|[^\n]+\|[^\n]+\|/, // Table
   ];
 
-  let matches = 0;
   for (const pattern of patterns) {
     if (pattern.test(sample)) {
-      matches++;
-      if (matches >= 2) return true;
+      return true;
     }
-  }
-
-  // Single strong signal like heading or codeblock
-  if (/^#{1,6}\s+[^\n]+/m.test(sample) || /```[\s\S]*?```/.test(sample)) {
-    return true;
   }
 
   return false;

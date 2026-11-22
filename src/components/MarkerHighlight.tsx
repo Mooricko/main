@@ -41,6 +41,13 @@ export interface MarkerHighlightProps extends React.HTMLAttributes<HTMLSpanEleme
   onWordSelect?: (wordIndex: number) => void;
   /** Stable callback for word hover by index */
   onWordHover?: (wordIndex: number, paragraphIndex?: number) => void;
+  /** Inline markdown formatting flags */
+  inlineCode?: boolean;
+  isBold?: boolean;
+  isItalic?: boolean;
+  isStrikethrough?: boolean;
+  /** Inherit subtle parent reading cursor instead of standard pointer */
+  subtleCursor?: boolean;
 }
 
 // Convert Hex color to RGBA helper (defined outside component to avoid reallocation)
@@ -96,6 +103,11 @@ const MarkerHighlightBase = React.forwardRef<HTMLSpanElement, MarkerHighlightPro
       paragraphIndex,
       onWordSelect,
       onWordHover,
+      inlineCode = false,
+      isBold = false,
+      isItalic = false,
+      isStrikethrough = false,
+      subtleCursor = false,
       ...rest
     },
     ref
@@ -142,6 +154,13 @@ const MarkerHighlightBase = React.forwardRef<HTMLSpanElement, MarkerHighlightPro
         highlight
       );
 
+    const inlineMarkdownClasses = [
+      inlineCode ? 'font-mono text-[0.88em] bg-white/10 dark:bg-white/10 border border-white/20 px-1 py-0.2 rounded shadow-2xs' : '',
+      isBold ? 'font-black tracking-wide' : '',
+      isItalic ? 'italic' : '',
+      isStrikethrough ? 'line-through opacity-60' : '',
+    ].filter(Boolean).join(' ');
+
     return (
       <span
         ref={ref}
@@ -151,7 +170,7 @@ const MarkerHighlightBase = React.forwardRef<HTMLSpanElement, MarkerHighlightPro
         onMouseLeave={onMouseLeave}
         title={title}
         dir={isRtl ? 'rtl' : 'ltr'}
-        className={`relative inline-block align-baseline px-1.5 py-0.5 cursor-pointer select-text rounded-lg transition-colors duration-75 ${className}`}
+        className={`relative inline-block align-baseline px-1.5 py-0.5 ${subtleCursor ? '[cursor:inherit]' : 'cursor-pointer'} select-text rounded-lg transition-colors duration-75 ${inlineMarkdownClasses} ${className}`}
         style={{
           position: 'relative',
           lineHeight: '1.2',

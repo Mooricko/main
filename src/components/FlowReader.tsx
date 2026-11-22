@@ -8,7 +8,13 @@ import {
   VolumeX,
   Focus,
   Zap,
-  Flame
+  Flame,
+  Hash,
+  Quote,
+  Terminal,
+  Info,
+  Sparkles,
+  AlertTriangle
 } from 'lucide-react';
 import { HighlightedWordParts, ReaderSettings, ReadingHeatmapData, WarmupStatus } from '../types';
 import { THEME_CONFIGS, HIGHLIGHT_COLORS, FONT_CONFIGS, resolveLetterSpacingEm } from '../utils/themeStyles';
@@ -23,6 +29,7 @@ import { ReadingHeatmapProgress } from './ReadingHeatmapProgress';
 import { LayoutGroup } from 'motion/react';
 import { measureDevTiming } from '../utils/performanceDiagnostics';
 import { ChapterScrubber, Chapter } from './ChapterScrubber';
+import { classifyFlowBlock, FlowWordItem } from '../utils/flowMarkdown';
 
 import { ReaderDocumentHandle, ParagraphIndexEntry, DocumentStructure } from '../types';
 
@@ -47,6 +54,7 @@ interface FlowReaderProps {
   onWordStep?: () => void;
   onSkipWarmup?: () => void;
   onResetWarmup?: () => void;
+  onPlayPointerDown?: () => void;
 }
 
 interface ParagraphGroup {
@@ -104,6 +112,7 @@ export const FlowReader: React.FC<FlowReaderProps> = ({
   onWordStep,
   onSkipWarmup,
   onResetWarmup,
+  onPlayPointerDown,
 }) => {
   const theme = THEME_CONFIGS[settings.theme];
   const highlight = HIGHLIGHT_COLORS[settings.highlightColor];
@@ -624,7 +633,15 @@ export const FlowReader: React.FC<FlowReaderProps> = ({
   // Follows the user's cursor position when hovering, or defaults to current reading word
   const targetWordIndex = hoveredWordIndex !== null ? hoveredWordIndex : currentIndex;
 
-  const isTextRtl = words.length > 0 && Boolean(words[0]?.isRtl || words.some((w) => w?.isRtl));
+  const isTextRtl = useMemo(() => {
+    if (!words || words.length === 0) return false;
+    let rtlCount = 0;
+    const sample = words.slice(0, 80);
+    for (const w of sample) {
+      if (w?.isRtl) rtlCount++;
+    }
+    return rtlCount > 0 && rtlCount >= sample.length * 0.3;
+  }, [words]);
 
   const scrubberRowHeight = useMemo(() => {
     if (!scrubberChapters || scrubberChapters.length === 0) return 10;
@@ -635,8 +652,8 @@ export const FlowReader: React.FC<FlowReaderProps> = ({
     <div className="flex flex-col flex-1 w-full mx-auto px-4 sm:px-6 py-3 sm:py-4 justify-between h-full min-h-0 relative select-none">
       {/* Top Status & Context Info */}
       <div 
-        className={`flex items-center justify-between gap-3 text-xs mb-3 transition-all duration-700 ease-out shrink-0 z-20 max-w-3xl mx-auto w-full ${
-          isIdle ? 'opacity-0 -translate-y-4 pointer-events-none' : 'opacity-100 translate-y-0'
+        className={`flex items-center justify-between gap-3 text-xs mb-3 transition-opacity duration-700 ease-out shrink-0 z-20 max-w-3xl mx-auto w-full ${
+          isIdle ? 'opacity-0' : 'opacity-100'
         }`}
       >
         <div className="flex items-center gap-2">
@@ -684,8 +701,8 @@ export const FlowReader: React.FC<FlowReaderProps> = ({
       <aside 
         id="flow-right-edge-toolbar"
         aria-label="Flow quick controls"
-        className={`fixed right-2 sm:right-3.5 top-1/2 -translate-y-1/2 z-30 flex flex-col items-center gap-2 p-1.5 rounded-2xl border ${theme.borderClass} ${theme.cardBgClass} backdrop-blur-md shadow-2xl transition-all duration-500 ease-out max-h-[calc(100vh-80px)] overflow-y-auto ${
-          isIdle ? 'opacity-0 translate-x-4 pointer-events-none' : 'opacity-100 translate-x-0'
+        className={`fixed right-2 sm:right-3.5 top-1/2 -translate-y-1/2 z-30 flex flex-col items-center gap-2 p-1.5 rounded-2xl border ${theme.borderClass} ${theme.cardBgClass} backdrop-blur-md shadow-2xl transition-opacity duration-500 ease-out max-h-[calc(100vh-80px)] overflow-y-auto ${
+          isIdle ? 'opacity-0' : 'opacity-100'
         }`}
       >
         {/* Word Size Controller (Vertical A+ / Size / A-) */}
@@ -790,7 +807,11 @@ export const FlowReader: React.FC<FlowReaderProps> = ({
         {/* Flow Content Rendered by Paragraphs */}
         <LayoutGroup id="flow-reader-marker">
           <div 
-            className={`max-w-3xl mx-auto relative z-10 ${isTextRtl && settings.fontFamily !== 'vazirmatn' ? 'font-vazirmatn' : ''}`}
+            className={`max-w-3xl mx-auto relative z-10 ${
+              settings.theme === 'light' || settings.theme === 'sepia'
+                ? 'flow-subtle-cursor-light'
+                : 'flow-subtle-cursor-dark'
+            } ${isTextRtl && settings.fontFamily !== 'vazirmatn' ? 'font-vazirmatn' : ''}`}
             dir={isTextRtl ? 'rtl' : 'ltr'}
           >
             {/* Top Virtualization Spacer */}
@@ -799,12 +820,446 @@ export const FlowReader: React.FC<FlowReaderProps> = ({
             )}
 
             {visibleGroups.map((group, groupIdx) => {
-              // Determine if this paragraph is unblurred (Item 3)
+              const meta = classifyFlowBlock(group.words, docStructure, settings.highlightStyle);
+
+              // Determine if this paragraph is unblurred (Focus Paragraph Blur setting)
               const isParagraphUnblurred =
                 !settings.focusParagraphBlur ||
                 group.paragraphIndex === hoveredParagraphIndex ||
                 (hoveredParagraphIndex === null && group.paragraphIndex === activeParagraphIndex);
 
+              // Helper to render individual words with inline markdown formatting & fixation tracking
+              const renderWord = (item: FlowWordItem) => {
+                const isTarget = item.globalIndex === targetWordIndex;
+                const isAudioCurrent = item.globalIndex === currentIndex;
+                const isPast = item.globalIndex < currentIndex;
+                const isBionic = settings.highlightStyle === 'bionic-prefix';
+                const hasWordParts = Boolean(item.word.highlightedText);
+
+                const cleanParts = item.inlineFormatting?.cleanWordParts;
+                const cleanDisplay = item.inlineFormatting?.cleanDisplay;
+
+                return (
+                  <MarkerHighlight
+                    key={`w-${item.globalIndex}`}
+                    ref={isAudioCurrent ? activeWordRef : null}
+                    highlight={cleanDisplay || item.word.original}
+                    wordParts={isBionic && (cleanParts || hasWordParts) ? (cleanParts || item.word) : undefined}
+                    markerColor={highlight.hex}
+                    isRtl={Boolean(item.word.isRtl)}
+                    isActive={isTarget}
+                    isHovered={hoveredWordIndex === item.globalIndex}
+                    wordIndex={item.globalIndex}
+                    paragraphIndex={group.paragraphIndex}
+                    onWordSelect={onIndexChange}
+                    onWordHover={handleWordHover}
+                    inlineCode={item.inlineFormatting?.isInlineCode}
+                    isBold={item.inlineFormatting?.isBold}
+                    isItalic={item.inlineFormatting?.isItalic}
+                    isStrikethrough={item.inlineFormatting?.isStrikethrough}
+                    subtleCursor
+                    title={`Word #${item.globalIndex + 1}: Click to start reading here`}
+                    className={`${
+                      isPast && isPlaying
+                        ? 'opacity-70 hover:opacity-100'
+                        : `${theme.textPrimary} hover:text-white hover:bg-white/5`
+                    }`}
+                  />
+                );
+              };
+
+              const isBlockRtl = meta.isRtl !== undefined ? meta.isRtl : isTextRtl;
+              const blockDir = meta.direction || (isBlockRtl ? 'rtl' : 'ltr');
+
+              // 1. Heading 1
+              if (meta.type === 'h1') {
+                return (
+                  <div
+                    key={`para-${group.paragraphIndex}-${groupIdx}`}
+                    ref={(el) => {
+                      paragraphRefs.current[group.paragraphIndex] = el;
+                    }}
+                    onMouseEnter={() =>
+                      setHoveredParagraphIndex((prev) =>
+                        prev === group.paragraphIndex ? prev : group.paragraphIndex
+                      )
+                    }
+                    dir={blockDir}
+                    className={`mt-8 sm:mt-10 mb-4 sm:mb-6 pt-5 pb-3 border-b ${theme.borderClass} transition-all duration-300 relative ${
+                      isParagraphUnblurred
+                        ? 'opacity-100 blur-0'
+                        : 'opacity-25 blur-[5px] select-none pointer-events-auto'
+                    }`}
+                    style={{ position: 'relative' }}
+                  >
+                    <div className={`flex items-center gap-2 mb-2 select-none ${isBlockRtl ? 'justify-end' : 'justify-start'}`}>
+                      <span 
+                        className="inline-flex items-center gap-1 text-[11px] font-mono font-bold uppercase px-2 py-0.5 rounded-md border tracking-wider shadow-2xs"
+                        style={{
+                          borderColor: `${highlight.hex}60`,
+                          color: highlight.hex,
+                          backgroundColor: `${highlight.hex}14`,
+                        }}
+                      >
+                        <Hash className="w-3 h-3" />
+                        H1
+                      </span>
+                    </div>
+                    <h1 
+                      className={`font-black tracking-tight leading-tight flex flex-wrap items-baseline gap-y-1 ${
+                        isBlockRtl ? 'font-vazirmatn text-right justify-start' : 'text-left'
+                      } ${theme.textPrimary}`}
+                      style={{ fontSize: '1.42em' }}
+                    >
+                      {meta.words.map((item) => {
+                        if (item.isPrefixToken) return null;
+                        return renderWord(item);
+                      })}
+                    </h1>
+                  </div>
+                );
+              }
+
+              // 2. Heading 2
+              if (meta.type === 'h2') {
+                return (
+                  <div
+                    key={`para-${group.paragraphIndex}-${groupIdx}`}
+                    ref={(el) => {
+                      paragraphRefs.current[group.paragraphIndex] = el;
+                    }}
+                    onMouseEnter={() =>
+                      setHoveredParagraphIndex((prev) =>
+                        prev === group.paragraphIndex ? prev : group.paragraphIndex
+                      )
+                    }
+                    dir={blockDir}
+                    className={`mt-6 sm:mt-8 mb-3 sm:mb-4 pt-3 pb-2 border-b border-white/5 transition-all duration-300 relative ${
+                      isParagraphUnblurred
+                        ? 'opacity-100 blur-0'
+                        : 'opacity-25 blur-[5px] select-none pointer-events-auto'
+                    }`}
+                    style={{ position: 'relative' }}
+                  >
+                    <h2 
+                      className={`font-extrabold tracking-tight leading-snug flex flex-wrap items-baseline gap-y-1 ${
+                        isBlockRtl ? 'font-vazirmatn text-right justify-start' : 'text-left'
+                      } ${theme.textPrimary}`}
+                      style={{ fontSize: '1.24em' }}
+                    >
+                      <span 
+                        className={`inline-block w-1.5 h-4 rounded-full self-center shrink-0 shadow-2xs select-none ${
+                          isBlockRtl ? 'ml-2' : 'mr-2'
+                        }`}
+                        style={{ backgroundColor: highlight.hex }} 
+                      />
+                      {meta.words.map((item) => {
+                        if (item.isPrefixToken) return null;
+                        return renderWord(item);
+                      })}
+                    </h2>
+                  </div>
+                );
+              }
+
+              // 3. Heading 3
+              if (meta.type === 'h3') {
+                return (
+                  <div
+                    key={`para-${group.paragraphIndex}-${groupIdx}`}
+                    ref={(el) => {
+                      paragraphRefs.current[group.paragraphIndex] = el;
+                    }}
+                    onMouseEnter={() =>
+                      setHoveredParagraphIndex((prev) =>
+                        prev === group.paragraphIndex ? prev : group.paragraphIndex
+                      )
+                    }
+                    dir={blockDir}
+                    className={`mt-5 sm:mt-6 mb-2.5 sm:mb-3 pt-2 transition-all duration-300 relative ${
+                      isParagraphUnblurred
+                        ? 'opacity-100 blur-0'
+                        : 'opacity-25 blur-[5px] select-none pointer-events-auto'
+                    }`}
+                    style={{ position: 'relative' }}
+                  >
+                    <h3 
+                      className={`font-bold tracking-tight leading-snug flex flex-wrap items-baseline gap-y-1 ${
+                        isBlockRtl ? 'font-vazirmatn text-right justify-start' : 'text-left'
+                      } ${theme.textPrimary}`}
+                      style={{ fontSize: '1.14em' }}
+                    >
+                      {meta.words.map((item) => {
+                        if (item.isPrefixToken) return null;
+                        return renderWord(item);
+                      })}
+                    </h3>
+                  </div>
+                );
+              }
+
+              // 4. Heading 4 / 5 / 6
+              if (meta.type === 'h4') {
+                return (
+                  <div
+                    key={`para-${group.paragraphIndex}-${groupIdx}`}
+                    ref={(el) => {
+                      paragraphRefs.current[group.paragraphIndex] = el;
+                    }}
+                    onMouseEnter={() =>
+                      setHoveredParagraphIndex((prev) =>
+                        prev === group.paragraphIndex ? prev : group.paragraphIndex
+                      )
+                    }
+                    dir={blockDir}
+                    className={`mt-4 sm:mt-5 mb-2 pt-1 transition-all duration-300 relative ${
+                      isParagraphUnblurred
+                        ? 'opacity-100 blur-0'
+                        : 'opacity-25 blur-[5px] select-none pointer-events-auto'
+                    }`}
+                    style={{ position: 'relative' }}
+                  >
+                    <h4 className={`font-semibold uppercase tracking-wider text-xs sm:text-sm text-white/80 flex flex-wrap items-baseline gap-y-1 ${
+                      isBlockRtl ? 'font-vazirmatn text-right justify-start' : 'text-left'
+                    }`}>
+                      {meta.words.map((item) => {
+                        if (item.isPrefixToken) return null;
+                        return renderWord(item);
+                      })}
+                    </h4>
+                  </div>
+                );
+              }
+
+              // 5. Blockquote
+              if (meta.type === 'blockquote') {
+                return (
+                  <div
+                    key={`para-${group.paragraphIndex}-${groupIdx}`}
+                    ref={(el) => {
+                      paragraphRefs.current[group.paragraphIndex] = el;
+                    }}
+                    onMouseEnter={() =>
+                      setHoveredParagraphIndex((prev) =>
+                        prev === group.paragraphIndex ? prev : group.paragraphIndex
+                      )
+                    }
+                    dir={blockDir}
+                    className={`my-4 sm:my-6 transition-all duration-300 relative py-3 px-4 sm:px-6 ${
+                      isBlockRtl
+                        ? 'rounded-l-2xl rounded-r-none border-r-4 sm:border-r-[5px] border-l-0 text-right'
+                        : 'rounded-r-2xl rounded-l-none border-l-4 sm:border-l-[5px] border-r-0 text-left'
+                    } ${theme.cardBgClass} bg-opacity-40 backdrop-blur-xs shadow-xs ${
+                      isParagraphUnblurred
+                        ? 'opacity-100 blur-0'
+                        : 'opacity-25 blur-[5px] select-none pointer-events-auto'
+                    }`}
+                    style={{
+                      position: 'relative',
+                      borderColor: highlight.hex,
+                    }}
+                  >
+                    <div className="flex items-start gap-2.5">
+                      <Quote 
+                        className={`w-4 h-4 shrink-0 mt-1 opacity-70 ${isBlockRtl ? 'rotate-180' : ''}`}
+                        style={{ color: highlight.hex }}
+                      />
+                      <div className={`flex-1 italic leading-relaxed ${isBlockRtl ? 'font-vazirmatn text-right' : 'text-left'}`}>
+                        {meta.words.map((item) => {
+                          if (item.isPrefixToken) return null;
+                          return renderWord(item);
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                );
+              }
+
+              // 6. Callouts / Admonitions
+              if (meta.type === 'callout') {
+                return (
+                  <div
+                    key={`para-${group.paragraphIndex}-${groupIdx}`}
+                    ref={(el) => {
+                      paragraphRefs.current[group.paragraphIndex] = el;
+                    }}
+                    onMouseEnter={() =>
+                      setHoveredParagraphIndex((prev) =>
+                        prev === group.paragraphIndex ? prev : group.paragraphIndex
+                      )
+                    }
+                    dir={blockDir}
+                    className={`my-4 sm:my-6 transition-all duration-300 relative rounded-2xl p-4 sm:p-5 border ${
+                      meta.calloutType === 'tip'
+                        ? 'border-emerald-500/40 bg-emerald-950/20 text-emerald-100'
+                        : meta.calloutType === 'warning'
+                        ? 'border-amber-500/40 bg-amber-950/20 text-amber-100'
+                        : meta.calloutType === 'important'
+                        ? 'border-rose-500/40 bg-rose-950/20 text-rose-100'
+                        : 'border-blue-500/40 bg-blue-950/20 text-blue-100'
+                    } shadow-md ${
+                      isParagraphUnblurred
+                        ? 'opacity-100 blur-0'
+                        : 'opacity-25 blur-[5px] select-none pointer-events-auto'
+                    }`}
+                    style={{ position: 'relative' }}
+                  >
+                    <div className={`flex items-center gap-2 mb-2.5 font-mono text-xs font-bold tracking-wider uppercase select-none ${
+                      isBlockRtl ? 'flex-row-reverse justify-end' : 'flex-row justify-start'
+                    }`}>
+                      {meta.calloutType === 'tip' && <Sparkles className="w-4 h-4 text-emerald-400" />}
+                      {meta.calloutType === 'warning' && <AlertTriangle className="w-4 h-4 text-amber-400" />}
+                      {meta.calloutType === 'important' && <Flame className="w-4 h-4 text-rose-400" />}
+                      {meta.calloutType === 'note' && <Info className="w-4 h-4 text-blue-400" />}
+                      <span>{meta.calloutType}</span>
+                    </div>
+                    <div className={`leading-relaxed ${isBlockRtl ? 'font-vazirmatn text-right' : 'text-left'}`}>
+                      {meta.words.map((item) => {
+                        if (item.isPrefixToken) return null;
+                        return renderWord(item);
+                      })}
+                    </div>
+                  </div>
+                );
+              }
+
+              // 7. Fenced Code Block (Always LTR)
+              if (meta.type === 'codeblock') {
+                return (
+                  <div
+                    key={`para-${group.paragraphIndex}-${groupIdx}`}
+                    ref={(el) => {
+                      paragraphRefs.current[group.paragraphIndex] = el;
+                    }}
+                    onMouseEnter={() =>
+                      setHoveredParagraphIndex((prev) =>
+                        prev === group.paragraphIndex ? prev : group.paragraphIndex
+                      )
+                    }
+                    dir="ltr"
+                    className={`my-5 sm:my-7 rounded-2xl border ${theme.borderClass} bg-black/75 dark:bg-black/90 shadow-2xl overflow-hidden font-mono text-[0.88em] text-left transition-all duration-300 relative ${
+                      isParagraphUnblurred
+                        ? 'opacity-100 blur-0'
+                        : 'opacity-25 blur-[5px] select-none pointer-events-auto'
+                    }`}
+                    style={{ position: 'relative' }}
+                  >
+                    {/* Terminal Header Bar */}
+                    <div className="flex items-center justify-between px-3.5 py-2 border-b border-white/10 bg-white/[0.03] select-none" dir="ltr">
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-2.5 h-2.5 rounded-full bg-red-500/80 inline-block" />
+                        <span className="w-2.5 h-2.5 rounded-full bg-yellow-500/80 inline-block" />
+                        <span className="w-2.5 h-2.5 rounded-full bg-green-500/80 inline-block" />
+                      </div>
+                      <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold uppercase tracking-wider text-zinc-400 bg-white/5 border border-white/10 px-2 py-0.5 rounded-md">
+                        <Terminal className="w-3 h-3 text-zinc-400" />
+                        {meta.codeLanguage || 'code'}
+                      </span>
+                    </div>
+                    {/* Code Body */}
+                    <div className="p-4 overflow-x-auto leading-relaxed text-left font-mono" dir="ltr">
+                      {meta.words.map((item) => {
+                        if (item.isPrefixToken) return null;
+                        return renderWord(item);
+                      })}
+                    </div>
+                  </div>
+                );
+              }
+
+              // 8. Unordered Bullet List
+              if (meta.type === 'bullet-list') {
+                return (
+                  <div
+                    key={`para-${group.paragraphIndex}-${groupIdx}`}
+                    ref={(el) => {
+                      paragraphRefs.current[group.paragraphIndex] = el;
+                    }}
+                    onMouseEnter={() =>
+                      setHoveredParagraphIndex((prev) =>
+                        prev === group.paragraphIndex ? prev : group.paragraphIndex
+                      )
+                    }
+                    dir={blockDir}
+                    className={`my-2 sm:my-2.5 flex items-start gap-3 transition-all duration-300 leading-relaxed relative ${
+                      isBlockRtl ? 'pr-2 sm:pr-4 pl-0 font-vazirmatn text-right' : 'pl-2 sm:pl-4 pr-0 text-left'
+                    } ${
+                      isParagraphUnblurred
+                        ? 'opacity-100 blur-0'
+                        : 'opacity-25 blur-[5px] select-none pointer-events-auto'
+                    }`}
+                    style={{ position: 'relative' }}
+                  >
+                    <span 
+                      className="shrink-0 mt-2.5 w-1.5 h-1.5 rounded-full shadow-xs select-none"
+                      style={{ backgroundColor: highlight.hex }} 
+                    />
+                    <div className={`flex-1 ${isBlockRtl ? 'font-vazirmatn text-right' : 'text-left'}`}>
+                      {meta.words.map((item) => {
+                        if (item.isPrefixToken) return null;
+                        return renderWord(item);
+                      })}
+                    </div>
+                  </div>
+                );
+              }
+
+              // 9. Ordered Numbered List
+              if (meta.type === 'ordered-list') {
+                return (
+                  <div
+                    key={`para-${group.paragraphIndex}-${groupIdx}`}
+                    ref={(el) => {
+                      paragraphRefs.current[group.paragraphIndex] = el;
+                    }}
+                    onMouseEnter={() =>
+                      setHoveredParagraphIndex((prev) =>
+                        prev === group.paragraphIndex ? prev : group.paragraphIndex
+                      )
+                    }
+                    dir={blockDir}
+                    className={`my-2 sm:my-2.5 flex items-start gap-2.5 transition-all duration-300 leading-relaxed relative ${
+                      isBlockRtl ? 'pr-2 sm:pr-4 pl-0 font-vazirmatn text-right' : 'pl-2 sm:pl-4 pr-0 text-left'
+                    } ${
+                      isParagraphUnblurred
+                        ? 'opacity-100 blur-0'
+                        : 'opacity-25 blur-[5px] select-none pointer-events-auto'
+                    }`}
+                    style={{ position: 'relative' }}
+                  >
+                    <span className={`shrink-0 mt-0.5 px-1.5 py-0.5 rounded-md font-mono text-[11px] font-bold ${theme.cardBgClass} border ${theme.borderClass} text-white/80 select-none shadow-2xs`}>
+                      {meta.listMarker || '1.'}
+                    </span>
+                    <div className={`flex-1 ${isBlockRtl ? 'font-vazirmatn text-right' : 'text-left'}`}>
+                      {meta.words.map((item) => {
+                        if (item.isPrefixToken) return null;
+                        return renderWord(item);
+                      })}
+                    </div>
+                  </div>
+                );
+              }
+
+              // 10. Horizontal Rule
+              if (meta.type === 'horizontal-rule') {
+                return (
+                  <div
+                    key={`para-${group.paragraphIndex}-${groupIdx}`}
+                    ref={(el) => {
+                      paragraphRefs.current[group.paragraphIndex] = el;
+                    }}
+                    className={`my-8 sm:my-10 flex items-center justify-center gap-3 relative select-none opacity-60 transition-all duration-300 ${
+                      isParagraphUnblurred ? 'opacity-70 blur-0' : 'opacity-20 blur-[2px]'
+                    }`}
+                  >
+                    <div className="flex-1 h-px bg-white/15" />
+                    <span className="w-2 h-2 rotate-45 border border-white/30 bg-white/10" />
+                    <div className="flex-1 h-px bg-white/15" />
+                  </div>
+                );
+              }
+
+              // 11. Standard Paragraph (Default)
               return (
                 <div
                   key={`para-${group.paragraphIndex}-${groupIdx}`}
@@ -816,43 +1271,17 @@ export const FlowReader: React.FC<FlowReaderProps> = ({
                       prev === group.paragraphIndex ? prev : group.paragraphIndex
                     )
                   }
+                  dir={blockDir}
                   className={`my-4 sm:my-6 transition-all duration-300 leading-relaxed relative ${
+                    isBlockRtl ? 'font-vazirmatn text-right' : 'text-left'
+                  } ${
                     isParagraphUnblurred
                       ? 'opacity-100 blur-0'
                       : 'opacity-25 blur-[5px] select-none pointer-events-auto'
                   }`}
                   style={{ position: 'relative' }}
                 >
-                  {group.words.map((item) => {
-                    const isTarget = item.globalIndex === targetWordIndex;
-                    const isAudioCurrent = item.globalIndex === currentIndex;
-                    const isPast = item.globalIndex < currentIndex;
-                    const isBionic = settings.highlightStyle === 'bionic-prefix';
-                    const hasWordParts = Boolean(item.word.highlightedText);
-
-                    return (
-                      <MarkerHighlight
-                        key={`w-${item.globalIndex}`}
-                        ref={isAudioCurrent ? activeWordRef : null}
-                        highlight={item.word.original}
-                        wordParts={isBionic && hasWordParts ? item.word : undefined}
-                        markerColor={highlight.hex}
-                        isRtl={Boolean(item.word.isRtl)}
-                        isActive={isTarget}
-                        isHovered={hoveredWordIndex === item.globalIndex}
-                        wordIndex={item.globalIndex}
-                        paragraphIndex={group.paragraphIndex}
-                        onWordSelect={onIndexChange}
-                        onWordHover={handleWordHover}
-                        title={`Word #${item.globalIndex + 1}: Click to start reading here`}
-                        className={`${
-                          isPast && isPlaying
-                            ? 'opacity-70 hover:opacity-100'
-                            : `${theme.textPrimary} hover:text-white hover:bg-white/5`
-                        }`}
-                      />
-                    );
-                  })}
+                  {meta.words.map((item) => renderWord(item))}
                 </div>
               );
             })}
@@ -865,10 +1294,10 @@ export const FlowReader: React.FC<FlowReaderProps> = ({
         </LayoutGroup>
       </div>
 
-      {/* Bottom Sticky Player Panel (Item 5: Locked on page; Item 8: Fades out after 5s mouse inactivity) */}
+      {/* Bottom Sticky Player Panel (Locked on page; fades out only during active playback after 5s mouse inactivity) */}
       <div 
-        className={`mt-3 rounded-2xl border ${theme.borderClass} ${theme.cardBgClass} p-4 shadow-lg flex flex-col gap-3 transition-all duration-700 ease-out shrink-0 z-20 ${
-          isIdle ? 'opacity-0 translate-y-4 pointer-events-none' : 'opacity-100 translate-y-0'
+        className={`mt-3 rounded-2xl border ${theme.borderClass} ${theme.cardBgClass} p-4 shadow-lg flex flex-col gap-3 transition-opacity duration-700 ease-out shrink-0 z-20 ${
+          isIdle ? 'opacity-0' : 'opacity-100'
         }`}
       >
         {/* Visual Reading Progress Indicator (Complexity Heatmap) */}
@@ -895,7 +1324,7 @@ export const FlowReader: React.FC<FlowReaderProps> = ({
               id="flow-restart-btn"
               type="button"
               onClick={onRestart}
-              title="Restart from beginning"
+              title="Restart from beginning (Shift + R)"
               aria-label="Restart"
               className={`p-2.5 rounded-xl border ${theme.borderClass} ${theme.textMuted} hover:${theme.textPrimary} hover:${theme.accentSurface} transition-colors`}
             >
@@ -911,6 +1340,11 @@ export const FlowReader: React.FC<FlowReaderProps> = ({
             id="flow-play-pause-btn"
             viewMode="icon"
             isPlaying={isPlaying}
+            onPointerDown={() => {
+              if (!isPlaying) {
+                onPlayPointerDown?.();
+              }
+            }}
             onClick={onTogglePlay}
             sheenColor={highlight.hex}
             title={isPlaying ? 'Pause Tracker (Space)' : 'Auto-Track Reading (Space)'}

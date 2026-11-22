@@ -441,7 +441,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
               {[
                 {
                   id: 'middle-two' as HighlightStyle,
-                  label: 'Two Middle Letters (Requested)',
+                  label: 'Two Middle Letters',
                   example: 're[ad]er',
                   desc: 'Locks vision onto the center 2 characters of each word',
                 },

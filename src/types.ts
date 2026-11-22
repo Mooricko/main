@@ -186,6 +186,7 @@ export interface SavedDocument {
   totalCharacters?: number;
   pageCount?: number;
   hasStructure?: boolean;
+  excerpt?: string;
 }
 
 export type InputSourceType = 'text' | 'url' | 'txt' | 'markdown' | 'pdf';
