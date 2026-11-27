@@ -649,7 +649,7 @@ export const FlowReader: React.FC<FlowReaderProps> = ({
   }, [scrubberChapters]);
 
   return (
-    <div className="flex flex-col flex-1 w-full mx-auto px-4 sm:px-6 py-3 sm:py-4 justify-between h-full min-h-0 relative select-none">
+    <div className="flex flex-col flex-1 w-full mx-auto px-4 sm:px-6 py-3 sm:py-4 justify-between h-full min-h-0 relative">
       {/* Top Status & Context Info */}
       <div 
         className={`flex items-center justify-between gap-3 text-xs mb-3 transition-opacity duration-700 ease-out shrink-0 z-20 max-w-3xl mx-auto w-full ${
@@ -701,7 +701,7 @@ export const FlowReader: React.FC<FlowReaderProps> = ({
       <aside 
         id="flow-right-edge-toolbar"
         aria-label="Flow quick controls"
-        className={`fixed right-2 sm:right-3.5 top-1/2 -translate-y-1/2 z-30 flex flex-col items-center gap-2 p-1.5 rounded-2xl border ${theme.borderClass} ${theme.cardBgClass} backdrop-blur-md shadow-2xl transition-opacity duration-500 ease-out max-h-[calc(100vh-80px)] overflow-y-auto ${
+        className={`fixed right-2 sm:right-3.5 top-1/2 -translate-y-1/2 z-30 flex flex-col items-center gap-2 p-1.5 rounded-2xl border ${theme.borderClass} ${theme.cardBgClass} backdrop-blur-md shadow-2xl transition-opacity duration-500 ease-out max-h-[calc(100vh-80px)] overflow-y-auto select-none ${
           isIdle ? 'opacity-0' : 'opacity-100'
         }`}
       >
@@ -1296,7 +1296,7 @@ export const FlowReader: React.FC<FlowReaderProps> = ({
 
       {/* Bottom Sticky Player Panel (Locked on page; fades out only during active playback after 5s mouse inactivity) */}
       <div 
-        className={`mt-3 rounded-2xl border ${theme.borderClass} ${theme.cardBgClass} p-4 shadow-lg flex flex-col gap-3 transition-opacity duration-700 ease-out shrink-0 z-20 ${
+        className={`mt-3 rounded-2xl border ${theme.borderClass} ${theme.cardBgClass} p-4 shadow-lg flex flex-col gap-3 transition-opacity duration-700 ease-out shrink-0 z-20 select-none ${
           isIdle ? 'opacity-0' : 'opacity-100'
         }`}
       >

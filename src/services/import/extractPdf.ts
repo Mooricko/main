@@ -8,6 +8,79 @@ import { dehyphenateText } from '../../utils/textParser';
  */
 export type PdfProgressCallback = (progressPercent: number, statusMessage: string) => void;
 
+export const PDF_WORKER_FILENAME = 'pdf.worker.min.mjs';
+
+export interface PdfWorkerEnv {
+  isExtension?: boolean;
+  getExtensionUrl?: (path: string) => string;
+  baseUri?: string;
+  locationHref?: string;
+}
+
+/**
+ * Resolves a local, same-origin or chrome-extension:// URL for the bundled PDF.js worker.
+ * Never returns an external CDN URL so PDF extraction works offline and complies with
+ * Chrome Extension Manifest V3 CSP (`script-src 'self'`).
+ */
+export function resolvePdfWorkerSrc(env?: PdfWorkerEnv): string {
+  if (env) {
+    if (env.isExtension && typeof env.getExtensionUrl === 'function') {
+      return env.getExtensionUrl(PDF_WORKER_FILENAME);
+    }
+    const base = env.baseUri || env.locationHref;
+    if (base) {
+      try {
+        return new URL(PDF_WORKER_FILENAME, base).href;
+      } catch {
+        return `./${PDF_WORKER_FILENAME}`;
+      }
+    }
+    return `./${PDF_WORKER_FILENAME}`;
+  }
+
+  // 1. Chrome Extension (Manifest V3) runtime
+  try {
+    const globalChrome = (
+      globalThis as {
+        chrome?: { runtime?: { id?: string; getURL?: (path: string) => string } };
+      }
+    ).chrome;
+    const isExtProtocol =
+      typeof window !== 'undefined' &&
+      typeof window.location?.protocol === 'string' &&
+      window.location.protocol.includes('chrome-extension');
+
+    if (
+      isExtProtocol &&
+      globalChrome?.runtime?.id &&
+      typeof globalChrome.runtime.getURL === 'function'
+    ) {
+      return globalChrome.runtime.getURL(PDF_WORKER_FILENAME);
+    }
+  } catch {
+    // Fall through to web base URI resolution
+  }
+
+  // 2. Web runtime (Vite dev, root origin, or subpath deployment)
+  if (typeof document !== 'undefined' && document.baseURI) {
+    try {
+      return new URL(PDF_WORKER_FILENAME, document.baseURI).href;
+    } catch {
+      // Fall through
+    }
+  }
+
+  if (typeof window !== 'undefined' && window.location?.href) {
+    try {
+      return new URL(PDF_WORKER_FILENAME, window.location.href).href;
+    } catch {
+      // Fall through
+    }
+  }
+
+  return `./${PDF_WORKER_FILENAME}`;
+}
+
 /**
  * Recursively extracts outline nodes from PDF.js document outlines, preserving tree hierarchy.
  */
@@ -130,22 +203,22 @@ export async function extractPdf(
   onProgress?.(10, 'Initializing PDF engine...');
 
   try {
-    // Dynamic import to allow graceful fallback
-    const pdfjsLib = await import('pdfjs-dist');
-    
-    // Configure worker source to unpkg or bundled worker
+    // Dynamic import of Mozilla's cross-browser legacy build (avoids ES2025-only API crashes
+    // like Uint8Array.toHex/Promise.try in older browsers and Node)
+    const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
+
+    // Configure local bundled worker (same-origin in web app, chrome-extension:// in extension)
     if (typeof window !== 'undefined' && pdfjsLib.GlobalWorkerOptions) {
       try {
-        if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
-          pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
-        }
+        pdfjsLib.GlobalWorkerOptions.workerSrc = resolvePdfWorkerSrc();
       } catch {
         // Ignore worker assignment error
       }
     }
 
+    // Pass a cloned buffer so PDF.js worker transfer cannot detach arrayBuffer if fallback is needed
     const loadingTask = pdfjsLib.getDocument({
-      data: new Uint8Array(arrayBuffer),
+      data: new Uint8Array(arrayBuffer.slice(0)),
       useSystemFonts: true,
     });
 

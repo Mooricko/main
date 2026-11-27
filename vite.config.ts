@@ -69,6 +69,38 @@ export default defineConfig(() => {
           });
         },
       },
+      {
+        name: 'vite-pdf-worker-plugin',
+        configureServer(server) {
+          server.middlewares.use((req, res, next) => {
+            const reqPath = req.url ? req.url.split('?')[0] : '';
+            if (reqPath.endsWith('/pdf.worker.min.mjs') || reqPath === 'pdf.worker.min.mjs') {
+              const nodeModulesWorker = path.resolve(
+                __dirname,
+                'node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs'
+              );
+              const publicWorker = path.resolve(__dirname, 'public/pdf.worker.min.mjs');
+              const workerPath = fs.existsSync(nodeModulesWorker) ? nodeModulesWorker : publicWorker;
+              if (fs.existsSync(workerPath) && fs.statSync(workerPath).isFile()) {
+                res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+                res.setHeader('Cache-Control', 'no-store');
+                return fs.createReadStream(workerPath).pipe(res);
+              }
+            }
+            next();
+          });
+        },
+        closeBundle() {
+          const workerSrc = path.resolve(
+            __dirname,
+            'node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs'
+          );
+          const distWorkerDest = path.resolve(__dirname, 'dist/pdf.worker.min.mjs');
+          if (fs.existsSync(workerSrc) && fs.existsSync(path.resolve(__dirname, 'dist'))) {
+            fs.copyFileSync(workerSrc, distWorkerDest);
+          }
+        },
+      },
     ],
     resolve: {
       alias: {
@@ -94,6 +126,7 @@ export default defineConfig(() => {
         'jszip',
         'gsap',
         'pdfjs-dist',
+        'pdfjs-dist/legacy/build/pdf.mjs',
       ],
       exclude: ['onnxruntime-web', 'espeak-ng'],
     },

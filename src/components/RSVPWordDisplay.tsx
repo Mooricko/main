@@ -109,7 +109,7 @@ export const RSVPWordDisplay: React.FC<RSVPWordDisplayProps> = ({
   return (
     <div
       id="rsvp-word-display"
-      className={`relative w-full flex items-baseline justify-center tracking-normal overflow-visible select-none ${
+      className={`relative w-full flex items-baseline justify-center tracking-normal overflow-visible ${
         currentWord.isRtl && settings.fontFamily !== 'vazirmatn' ? 'font-vazirmatn' : font.className
       }`}
       style={{

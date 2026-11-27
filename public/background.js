@@ -1,5 +1,5 @@
 /**
- * ADHD Reader - Background Service Worker (Manifest V3)
+ * Khoroos Reader - Background Service Worker (Manifest V3)
  */
 
 // Register context menus on extension install / update
@@ -7,14 +7,14 @@ chrome.runtime.onInstalled.addListener(() => {
   // Selection context menu
   chrome.contextMenus.create({
     id: 'adhd-read-selection',
-    title: '⚡ Read selected text with ADHD Reader',
+    title: '⚡ Read selected text with Khoroos Reader',
     contexts: ['selection']
   });
 
   // Entire page context menu
   chrome.contextMenus.create({
     id: 'adhd-read-page',
-    title: '📖 Read webpage with ADHD Reader',
+    title: '📖 Read webpage with Khoroos Reader',
     contexts: ['page']
   });
 });

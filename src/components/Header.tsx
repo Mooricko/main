@@ -94,7 +94,7 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
 
         {/* Action Controls */}
-        <div className="flex items-center gap-1.5 sm:gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2 select-none">
           {/* Reading Statistics & Analytics Button */}
           {onOpenStatsModal && (
             <button

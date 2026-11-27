@@ -374,7 +374,7 @@ export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
                     Try highlighting text below with your mouse!
                   </p>
                   <p className={theme.textMuted}>
-                    Notice how the content script attaches the floating <strong className="text-red-500">[ ⚡ Read in ADHD Reader ]</strong> bubble directly over your selection. Clicking it instantly transfers the text into RSVP word-by-word mode.
+                    Notice how the content script attaches the floating <strong className="text-red-500">[ ⚡ Read in Khoroos Reader ]</strong> bubble directly over your selection. Clicking it instantly transfers the text into RSVP word-by-word mode.
                   </p>
                 </div>
               </div>
@@ -456,7 +456,7 @@ export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
                         className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-900 border border-red-500 text-white text-xs font-bold shadow-xl hover:bg-slate-800 hover:scale-105 active:scale-95 transition-all"
                       >
                         <Zap className="w-3.5 h-3.5 text-red-500 fill-red-500" />
-                        <span>Read in ADHD Reader</span>
+                        <span>Read in Khoroos Reader</span>
                       </button>
                     </div>
                   )}
@@ -479,7 +479,7 @@ export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
               <div className={`p-4 rounded-xl border ${theme.borderClass} ${theme.accentSurface} space-y-2`}>
                 <h4 className={`text-sm font-bold ${theme.textPrimary} flex items-center gap-2`}>
                   <Puzzle className="w-4 h-4 text-red-500" />
-                  Install ADHD Reader in Google Chrome in 30 Seconds
+                  Install Khoroos Reader in Google Chrome in 30 Seconds
                 </h4>
                 <p className={`text-xs ${theme.textMuted}`}>
                   Follow these standard developer steps to load the Manifest V3 extension:
@@ -546,7 +546,7 @@ export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
                     Start Highlighting & Reading
                   </div>
                   <p className={theme.textPrimary}>
-                    Visit any website (news, Wikipedia, documentation, Substack). Highlight any text to see the floating <strong>⚡ Read in ADHD Reader</strong> button, or right-click to read!
+                    Visit any website (news, Wikipedia, documentation, Substack). Highlight any text to see the floating <strong>⚡ Read in Khoroos Reader</strong> button, or right-click to read!
                   </p>
                 </div>
               </div>
@@ -888,7 +888,7 @@ function getCodeSnippet(type: 'manifest' | 'background' | 'offscreenHtml' | 'off
     case 'manifest':
       return `{
   "manifest_version": 3,
-  "name": "ADHD Reader - RSVP & Focus Highlighter",
+  "name": "Khoroos Reader",
   "version": "1.0.0",
   "description": "Word-by-word RSVP focus reader highlighting middle letters in red. Offline Dual-Engine Farsi TTS (Piper ONNX & eSpeak WASM).",
   "permissions": [
@@ -915,6 +915,7 @@ function getCodeSnippet(type: 'manifest' | 'background' | 'offscreenHtml' | 'off
         "ort-wasm-simd-threaded.mjs",
         "tts-engine.bundle.js",
         "espeak-ng.wasm",
+        "pdf.worker.min.mjs",
         "assets/*"
       ],
       "matches": ["<all_urls>"]
@@ -922,7 +923,7 @@ function getCodeSnippet(type: 'manifest' | 'background' | 'offscreenHtml' | 'off
   ],
   "action": {
     "default_popup": "index.html",
-    "default_title": "ADHD Reader",
+    "default_title": "Khoroos Reader",
     "default_icon": { "16": "icons/icon16.png", "48": "icons/icon48.png", "128": "icons/icon128.png" }
   },
   "background": {
@@ -977,7 +978,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>ADHD Reader - Farsi Offline TTS Pipeline</title>
+  <title>Khoroos Reader - Farsi Offline TTS Pipeline</title>
 </head>
 <body>
   <audio id="tts-audio-player"></audio>

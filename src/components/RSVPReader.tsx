@@ -476,7 +476,7 @@ export const RSVPReader: React.FC<RSVPReaderProps> = ({
   const isTextRtl = words.length > 0 && Boolean(words[0]?.isRtl || words.some((w) => w?.isRtl));
 
   return (
-    <div className="flex flex-col flex-1 w-full max-w-5xl mx-auto px-4 sm:px-6 py-3 sm:py-6 justify-between select-none min-h-0 overflow-hidden relative">
+    <div className="flex flex-col flex-1 w-full max-w-5xl mx-auto px-4 sm:px-6 py-3 sm:py-6 justify-between min-h-0 overflow-hidden relative">
       {/* Top Status & Context Info */}
       <div 
         className={`flex items-center justify-between gap-3 text-xs transition-opacity duration-700 ease-out shrink-0 z-20 ${
@@ -498,7 +498,7 @@ export const RSVPReader: React.FC<RSVPReaderProps> = ({
       <aside 
         id="rsvp-right-edge-toolbar"
         aria-label="RSVP quick controls"
-        className={`fixed right-2 sm:right-3.5 top-1/2 -translate-y-1/2 z-30 flex flex-col items-center gap-2 p-1.5 rounded-2xl border ${theme.borderClass} ${theme.cardBgClass} backdrop-blur-md shadow-2xl transition-opacity duration-500 ease-out max-h-[calc(100vh-80px)] overflow-y-auto ${
+        className={`fixed right-2 sm:right-3.5 top-1/2 -translate-y-1/2 z-30 flex flex-col items-center gap-2 p-1.5 rounded-2xl border ${theme.borderClass} ${theme.cardBgClass} backdrop-blur-md shadow-2xl transition-opacity duration-500 ease-out max-h-[calc(100vh-80px)] overflow-y-auto select-none ${
           isIdle ? 'opacity-0' : 'opacity-100'
         }`}
       >
@@ -755,7 +755,7 @@ export const RSVPReader: React.FC<RSVPReaderProps> = ({
                 setHasFinished(false);
                 onRestart();
               }}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-white transition-transform active:scale-95 shadow-md"
+              className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-white transition-transform active:scale-95 shadow-md select-none"
               style={{ backgroundColor: highlight.hex }}
             >
               <RotateCcw className="w-4 h-4" />
@@ -821,7 +821,7 @@ export const RSVPReader: React.FC<RSVPReaderProps> = ({
 
       {/* Playback Controls & Timeline Bar */}
       <div 
-        className={`w-full rounded-2xl border ${theme.borderClass} ${theme.cardBgClass} p-4 sm:p-5 shadow-lg transition-opacity duration-700 ease-out shrink-0 z-20 ${
+        className={`w-full rounded-2xl border ${theme.borderClass} ${theme.cardBgClass} p-4 sm:p-5 shadow-lg transition-opacity duration-700 ease-out shrink-0 z-20 select-none ${
           isIdle ? 'opacity-0' : 'opacity-100'
         }`}
       >

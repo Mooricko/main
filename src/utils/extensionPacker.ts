@@ -35,9 +35,9 @@ export async function downloadExtensionPackage(): Promise<void> {
     // fallback
   }
 
-  // 2. Fetch extension background, content scripts, offscreen document & offline TTS engine bundle
+  // 2. Fetch extension background, content scripts, offscreen document, PDF worker & offline TTS engine bundle
   try {
-    const [contentJs, contentCss, bgJs, offscreenHtml, offscreenJs, ortJs, ttsBundleJs] = await Promise.all([
+    const [contentJs, contentCss, bgJs, offscreenHtml, offscreenJs, ortJs, ttsBundleJs, pdfWorkerMjs] = await Promise.all([
       fetch('./content.js').then((r) => r.ok ? r.text() : ''),
       fetch('./content.css').then((r) => r.ok ? r.text() : ''),
       fetch('./background.js').then((r) => r.ok ? r.text() : ''),
@@ -45,6 +45,7 @@ export async function downloadExtensionPackage(): Promise<void> {
       fetch('./offscreen.js').then((r) => r.ok ? r.text() : ''),
       fetch('./ort.min.js').then((r) => r.ok ? r.text() : ''),
       fetch('./tts-engine.bundle.js').then((r) => r.ok ? r.text() : ''),
+      fetch('./pdf.worker.min.mjs').then((r) => r.ok ? r.text() : ''),
     ]);
 
     if (contentJs) zip.file('content.js', contentJs);
@@ -54,6 +55,7 @@ export async function downloadExtensionPackage(): Promise<void> {
     if (offscreenJs) zip.file('offscreen.js', offscreenJs);
     if (ortJs) zip.file('ort.min.js', ortJs);
     if (ttsBundleJs) zip.file('tts-engine.bundle.js', ttsBundleJs);
+    if (pdfWorkerMjs) zip.file('pdf.worker.min.mjs', pdfWorkerMjs);
   } catch (err) {
     console.warn('Failed to fetch extension scripts:', err);
   }
@@ -78,7 +80,7 @@ export async function downloadExtensionPackage(): Promise<void> {
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ADHD Reader - Word-by-Word RSVP Focus Reader</title>
+    <title>Khoroos Reader - Word-by-Word RSVP Focus Reader</title>
     <meta name="description" content="Word-by-word RSVP focus reader with middle-letter highlighting." />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -115,26 +117,26 @@ export async function downloadExtensionPackage(): Promise<void> {
   }
 
   // 6. Add complete installation instructions
-  const readme = `ADHD Reader - Chrome Extension (Manifest V3)
+  const readme = `Khoroos Reader - Chrome Extension (Manifest V3)
 ===================================================
 How to install this extension in Google Chrome:
 
-1. Extract / Unzip this folder to a local directory (e.g. ~/Downloads/adhd-reader-extension)
+1. Extract / Unzip this folder to a local directory (e.g. ~/Downloads/khoroos-reader-extension)
 2. Open Google Chrome and go to: chrome://extensions
 3. In the top-right corner, toggle ON "Developer mode"
 4. Click "Load unpacked" in the top-left corner
 5. Select the extracted folder containing manifest.json
-6. Done! Pin the ADHD Reader extension to your browser toolbar.
+6. Done! Pin the Khoroos Reader extension to your browser toolbar.
 
 How to capture and read text from any webpage:
 ---------------------------------------------
 - Method 1 (Quick Floating Bubble): Highlight any sentence, article, or paragraph
-  on any website. A floating "[ ⚡ Read in ADHD Reader ]" pill will appear right above
+  on any website. A floating "[ ⚡ Read in Khoroos Reader ]" pill will appear right above
   your selection. Click it to immediately open the word-by-word RSVP reader!
 - Method 2 (Right-Click Menu): Highlight text, right click, and select
-  "⚡ Read selected text with ADHD Reader".
+  "⚡ Read selected text with Khoroos Reader".
 - Method 3 (Keyboard Shortcut): Highlight text and press Alt+R (Option+R on Mac).
-- Method 4 (Toolbar Popup): Click the ADHD Reader icon in your browser toolbar.
+- Method 4 (Toolbar Popup): Click the Khoroos Reader icon in your browser toolbar.
 `;
   zip.file('README.txt', readme);
 

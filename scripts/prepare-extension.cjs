@@ -46,7 +46,7 @@ async function prepareExtension() {
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ADHD Reader - Word-by-Word RSVP Focus Reader</title>
+    <title>Khoroos Reader - Word-by-Word RSVP Focus Reader</title>
     <meta name="description" content="Word-by-word RSVP focus reader with middle-letter highlighting." />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -62,6 +62,15 @@ async function prepareExtension() {
   fs.writeFileSync(path.join(extDir, 'index.html'), extensionHtml, 'utf8');
   fs.writeFileSync(path.join(distDir, 'index.html'), extensionHtml, 'utf8');
 
+  // 2.5 Sync exact version-matched PDF.js worker from installed pdfjs-dist legacy build
+  const pdfWorkerSrc = path.join(rootDir, 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.min.mjs');
+  if (fs.existsSync(pdfWorkerSrc)) {
+    fs.copyFileSync(pdfWorkerSrc, path.join(publicDir, 'pdf.worker.min.mjs'));
+    console.log('✓ Synced pdf.worker.min.mjs from pdfjs-dist legacy build');
+  } else {
+    console.warn('⚠️ Warning: pdf.worker.min.mjs not found in node_modules/pdfjs-dist/legacy/build');
+  }
+
   // 3. Copy manifest, background, content, icons, offscreen document & runtime assets
   const filesToCopy = [
     'manifest.json',
@@ -75,7 +84,8 @@ async function prepareExtension() {
     'ort-wasm-simd-threaded.mjs',
     'tts-engine.bundle.js',
     'espeak-ng.wasm',
-    'fa_IR-amir-medium.onnx.json'
+    'fa_IR-amir-medium.onnx.json',
+    'pdf.worker.min.mjs'
   ];
 
   for (const file of filesToCopy) {
@@ -108,7 +118,7 @@ async function prepareExtension() {
   }
 
   // 4. Create README.txt
-  const readmeText = `ADHD Reader - Chrome Extension (Manifest V3)
+  const readmeText = `Khoroos Reader - Chrome Extension (Manifest V3)
 ===================================================
 How to install this extension in Google Chrome:
 
@@ -116,17 +126,17 @@ How to install this extension in Google Chrome:
 2. In the top-right corner, turn ON the "Developer mode" toggle.
 3. Click the "Load unpacked" button in the top-left corner.
 4. Select this extracted folder (the one containing manifest.json).
-5. Done! Click the Extensions puzzle icon in Chrome toolbar and Pin ADHD Reader.
+5. Done! Click the Extensions puzzle icon in Chrome toolbar and Pin Khoroos Reader.
 
 How to read highlighted text from any webpage:
 ---------------------------------------------
 - Method 1 (Quick Floating Bubble): Highlight any sentence, article, or paragraph
-  on any website. A floating "⚡ Read in ADHD Reader" pill will appear right above
+  on any website. A floating "⚡ Read in Khoroos Reader" pill will appear right above
   your selection. Click it to immediately open the RSVP Reader!
 - Method 2 (Right-Click Menu): Highlight text, right click, and select
-  "⚡ Read selected text with ADHD Reader".
+  "⚡ Read selected text with Khoroos Reader".
 - Method 3 (Keyboard Shortcut): Highlight text and press Alt+R (Option+R on Mac).
-- Method 4 (Toolbar Popup): Click the ADHD Reader icon in your browser toolbar.
+- Method 4 (Toolbar Popup): Click the Khoroos Reader icon in your browser toolbar.
 `;
   fs.writeFileSync(path.join(extDir, 'README.txt'), readmeText, 'utf8');
 
@@ -156,6 +166,9 @@ How to read highlighted text from any webpage:
   }
   if (fs.existsSync(path.join(extDir, 'fa_IR-amir-medium.onnx.json'))) {
     zip.file('fa_IR-amir-medium.onnx.json', fs.readFileSync(path.join(extDir, 'fa_IR-amir-medium.onnx.json'), 'utf8'));
+  }
+  if (fs.existsSync(path.join(extDir, 'pdf.worker.min.mjs'))) {
+    zip.file('pdf.worker.min.mjs', fs.readFileSync(path.join(extDir, 'pdf.worker.min.mjs'), 'utf8'));
   }
 
   const assetsFolder = zip.folder('assets');

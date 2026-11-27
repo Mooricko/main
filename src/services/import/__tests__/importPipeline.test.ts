@@ -15,6 +15,7 @@ import { markdownToReadableText, extractMarkdown, cleanMarkdownContent } from '.
 import { extractTxt } from '../extractTxt';
 import { parseHtmlArticle, formatValidUrl, fetchUrlPreview, isWikipediaUrl } from '../extractUrl';
 import { extractClipboardContent, processUniversalInput } from '../extractText';
+import { resolvePdfWorkerSrc, PDF_WORKER_FILENAME, extractPdf } from '../extractPdf';
 
 let testsPassed = 0;
 let testsFailed = 0;
@@ -364,6 +365,82 @@ const focus = true;
 
     const nonWiki = isWikipediaUrl('https://example.com/wiki/test');
     assert(nonWiki === null, 'Rejects non-Wikipedia domains with /wiki/ path');
+  }
+
+  // 10. LOCAL PDF.JS WORKER RESOLUTION & OFFLINE EXTRACTION
+  console.log('\n--- 10. Local PDF.js Worker Resolution & Offline Extraction ---');
+  {
+    const extWorker = resolvePdfWorkerSrc({
+      isExtension: true,
+      getExtensionUrl: (p) => `chrome-extension://abcdefghijklmnop/${p}`,
+    });
+    assert(
+      extWorker === `chrome-extension://abcdefghijklmnop/${PDF_WORKER_FILENAME}`,
+      'Resolves chrome-extension:// local worker URL in extension runtime'
+    );
+    assert(!extWorker.includes('unpkg'), 'Extension worker URL never references unpkg CDN');
+
+    const webRootWorker = resolvePdfWorkerSrc({
+      isExtension: false,
+      baseUri: 'https://reader.example.com/',
+    });
+    assert(
+      webRootWorker === `https://reader.example.com/${PDF_WORKER_FILENAME}`,
+      'Resolves same-origin worker URL at web root'
+    );
+    assert(!webRootWorker.includes('unpkg'), 'Web root worker URL never references unpkg CDN');
+
+    const webSubpathWorker = resolvePdfWorkerSrc({
+      isExtension: false,
+      baseUri: 'https://reader.example.com/app/index.html',
+    });
+    assert(
+      webSubpathWorker === `https://reader.example.com/app/${PDF_WORKER_FILENAME}`,
+      'Resolves same-origin worker URL under subpath deployment'
+    );
+
+    const fallbackLocalWorker = resolvePdfWorkerSrc({});
+    assert(
+      fallbackLocalWorker === `./${PDF_WORKER_FILENAME}`,
+      'Falls back to relative local worker filename without external CDN'
+    );
+
+    // Offline PDF validation & minimal valid PDF extraction (zero network calls)
+    const minimalPdf = `%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >> endobj
+4 0 obj << /Length 68 >> stream
+BT /F1 12 Tf 72 720 Td (Khoroos Reader offline PDF extraction test works cleanly.) Tj ET
+endstream endobj
+xref
+0 5
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000199 00000 n 
+trailer << /Size 5 /Root 1 0 R >>
+startxref
+318
+%%EOF`;
+    const pdfBytes = new TextEncoder().encode(minimalPdf).buffer;
+    const pdfDoc = await extractPdf(pdfBytes, 'offline-sample.pdf');
+    assert(pdfDoc.sourceType === 'pdf', 'extractPdf produces pdf ReaderDocument offline');
+    assert(
+      pdfDoc.content.includes('Khoroos Reader offline PDF extraction test works cleanly.'),
+      'extractPdf extracts text cleanly without external network access'
+    );
+
+    try {
+      await extractPdf(new TextEncoder().encode('not a pdf').buffer, 'bad.pdf');
+      assert(false, 'Should reject non-PDF file header');
+    } catch (e: any) {
+      assert(
+        String(e.message).includes('valid PDF'),
+        'Rejects invalid PDF magic header with clear error'
+      );
+    }
   }
 
   console.log('\n=============================================');

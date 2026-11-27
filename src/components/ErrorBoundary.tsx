@@ -50,7 +50,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
   public render() {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen bg-[#0f1117] text-slate-100 flex items-center justify-center p-6 select-none font-sans">
+        <div className="min-h-screen bg-[#0f1117] text-slate-100 flex items-center justify-center p-6 font-sans">
           <div className="max-w-md w-full bg-[#161a23] border border-slate-800/80 rounded-2xl p-6 shadow-2xl space-y-5 text-center">
             <div className="w-12 h-12 mx-auto rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-400 text-xl font-bold">
               !
@@ -71,7 +71,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
               </div>
             )}
 
-            <div className="flex flex-col gap-2 pt-2">
+            <div className="flex flex-col gap-2 pt-2 select-none">
               <button
                 id="error-boundary-retry-button"
                 onClick={this.handleRetry}

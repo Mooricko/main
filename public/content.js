@@ -15,7 +15,7 @@
   let lastSelectionText = '';
 
   /**
-   * Create and position floating "⚡ Read with ADHD Reader" button near selection
+   * Create and position floating "⚡ Read with Khoroos Reader" button near selection
    */
   function createFloatingButton() {
     if (floatingButton) return floatingButton;
@@ -25,12 +25,12 @@
     btn.className = 'adhd-reader-bubble-hidden';
     btn.setAttribute('role', 'button');
     btn.setAttribute('tabindex', '0');
-    btn.setAttribute('aria-label', 'Read highlighted text with ADHD Reader');
+    btn.setAttribute('aria-label', 'Read highlighted text with Khoroos Reader');
 
     btn.innerHTML = `
       <div class="adhd-reader-bubble-inner">
         <span class="adhd-reader-bubble-icon">⚡</span>
-        <span class="adhd-reader-bubble-label">Read in ADHD Reader</span>
+        <span class="adhd-reader-bubble-label">Read in Khoroos Reader</span>
       </div>
     `;
 
@@ -112,7 +112,7 @@
       if (label) label.textContent = 'Opening Reader...';
       setTimeout(() => {
         hideFloatingButton();
-        if (label) label.textContent = 'Read in ADHD Reader';
+        if (label) label.textContent = 'Read in Khoroos Reader';
         floatingButton?.classList.remove('adhd-reader-bubble-success');
       }, 1000);
     }

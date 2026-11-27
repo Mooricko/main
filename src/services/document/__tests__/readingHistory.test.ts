@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import { SavedDocument } from '../../../types';
 import {
   buildHistoryExcerpt,
+  createDeferredDeleteController,
   createUniqueDocumentId,
+  formatHistoryToastTitle,
+  restoreHistoryDocument,
   upsertHistoryDocument,
 } from '../readingHistory';
 
@@ -120,3 +123,120 @@ test('buildHistoryExcerpt produces clean compact single-line previews', () => {
   assert.ok(excerpt.length <= 40);
   assert.ok(excerpt.endsWith('…'));
 });
+
+test('restoreHistoryDocument re-inserts at original index, clamps bounds, and deduplicates', () => {
+  const docA = makeDoc({ id: 'doc-a', title: 'Alpha' });
+  const docB = makeDoc({ id: 'doc-b', title: 'Beta' });
+  const docC = makeDoc({ id: 'doc-c', title: 'Gamma' });
+
+  const restoredMiddle = restoreHistoryDocument([docA, docC], docB, 1);
+  assert.deepEqual(
+    restoredMiddle.map((d) => d.id),
+    ['doc-a', 'doc-b', 'doc-c']
+  );
+
+  const restoredClamped = restoreHistoryDocument([docA], docC, 99);
+  assert.deepEqual(
+    restoredClamped.map((d) => d.id),
+    ['doc-a', 'doc-c']
+  );
+
+  const restoredDeduped = restoreHistoryDocument([docA, docB, docC], docB, 0);
+  assert.deepEqual(
+    restoredDeduped.map((d) => d.id),
+    ['doc-b', 'doc-a', 'doc-c']
+  );
+});
+
+test('formatHistoryToastTitle truncates long titles and falls back for blank titles', () => {
+  assert.equal(formatHistoryToastTitle('   '), 'Untitled');
+  assert.equal(formatHistoryToastTitle('Short Title', 36), 'Short Title');
+  const truncated = formatHistoryToastTitle('A Very Long Research Paper Title About Focus And Reading', 24);
+  assert.ok(truncated.length <= 24);
+  assert.ok(truncated.endsWith('…'));
+});
+
+test('createDeferredDeleteController defers commit until timer expires and cancels cleanly on undo', () => {
+  const committed: string[] = [];
+  const timers = new Map<number, () => void>();
+  let nextTimerId = 1;
+
+  const controller = createDeferredDeleteController({
+    delayMs: 6000,
+    onCommit: (id) => committed.push(id),
+    setTimer: (cb) => {
+      const id = nextTimerId++;
+      timers.set(id, cb);
+      return id as unknown as ReturnType<typeof setTimeout>;
+    },
+    clearTimer: (handle) => {
+      timers.delete(handle as unknown as number);
+    },
+  });
+
+  const docA = makeDoc({ id: 'doc-a', title: 'Alpha' });
+  controller.schedule({ doc: docA, originalIndex: 1 });
+
+  // Not deleted from IndexedDB immediately
+  assert.deepEqual(committed, []);
+  assert.equal(controller.getPending()?.doc.id, 'doc-a');
+  assert.equal(timers.size, 1);
+
+  // Undo cancels timer and prevents commit
+  const restored = controller.undo('doc-a');
+  assert.equal(restored?.doc.id, 'doc-a');
+  assert.equal(restored?.originalIndex, 1);
+  assert.equal(controller.getPending(), null);
+  assert.equal(timers.size, 0);
+  assert.deepEqual(committed, []);
+
+  // Re-schedule and let timer expire -> commits to IndexedDB
+  controller.schedule({ doc: docA, originalIndex: 1 });
+  const [[, fireTimeout]] = Array.from(timers.entries());
+  fireTimeout();
+  assert.deepEqual(committed, ['doc-a']);
+  assert.equal(controller.getPending(), null);
+});
+
+test('createDeferredDeleteController commits earlier delete when another delete is scheduled and on flush', () => {
+  const committed: string[] = [];
+  const timers = new Map<number, () => void>();
+  let nextTimerId = 1;
+
+  const controller = createDeferredDeleteController({
+    delayMs: 6000,
+    onCommit: (id) => committed.push(id),
+    setTimer: (cb) => {
+      const id = nextTimerId++;
+      timers.set(id, cb);
+      return id as unknown as ReturnType<typeof setTimeout>;
+    },
+    clearTimer: (handle) => {
+      timers.delete(handle as unknown as number);
+    },
+  });
+
+  const docA = makeDoc({ id: 'doc-a', title: 'Alpha' });
+  const docB = makeDoc({ id: 'doc-b', title: 'Beta' });
+
+  controller.schedule({ doc: docA, originalIndex: 0 });
+  assert.deepEqual(committed, []);
+
+  // Deleting docB commits docA immediately while keeping docB undoable
+  controller.schedule({ doc: docB, originalIndex: 0 });
+  assert.deepEqual(committed, ['doc-a']);
+  assert.equal(controller.getPending()?.doc.id, 'doc-b');
+  assert.equal(timers.size, 1);
+
+  // Undo with mismatched ID does nothing
+  assert.equal(controller.undo('doc-a'), null);
+  assert.equal(controller.getPending()?.doc.id, 'doc-b');
+
+  // Flush commits pending docB exactly once
+  controller.flush();
+  controller.flush();
+  assert.deepEqual(committed, ['doc-a', 'doc-b']);
+  assert.equal(controller.getPending(), null);
+  assert.equal(timers.size, 0);
+});
+

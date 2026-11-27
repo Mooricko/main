@@ -67,7 +67,11 @@ import {
 } from './services/document/migration';
 import {
   buildHistoryExcerpt,
+  createDeferredDeleteController,
   createUniqueDocumentId,
+  formatHistoryToastTitle,
+  HISTORY_DELETE_UNDO_MS,
+  restoreHistoryDocument,
   upsertHistoryDocument,
 } from './services/document/readingHistory';
 import { hasDragDataFromOutside, extractLinkFromDataTransfer } from './services/import/detectInput';
@@ -195,6 +199,8 @@ export default function App() {
     }
     return SAMPLE_TEXTS;
   });
+  const savedDocsRef = useRef<SavedDocument[]>(savedDocs);
+  savedDocsRef.current = savedDocs;
 
   const [activeDocId, setActiveDocId] = useState<string>(() => {
     try {
@@ -352,6 +358,7 @@ export default function App() {
     id: number;
     message: string;
     actionLabel?: string;
+    actionTitle?: string;
     onAction?: () => void;
   } | null>(null);
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -500,6 +507,7 @@ export default function App() {
     msg: string,
     options?: {
       actionLabel?: string;
+      actionTitle?: string;
       onAction?: () => void;
       durationMs?: number;
       bypassDnd?: boolean;
@@ -518,6 +526,7 @@ export default function App() {
       id,
       message: msg,
       actionLabel: options?.actionLabel,
+      actionTitle: options?.actionTitle,
       onAction: options?.onAction,
     });
     toastTimeoutRef.current = setTimeout(() => {
@@ -1000,12 +1009,44 @@ export default function App() {
     };
   }, [handleApplyText, showToast]);
 
-  const handleDeleteDocument = useCallback((id: string) => {
-    // Delete from IndexedDB asynchronously
-    documentStorageService.deleteDocument(id).catch((err) => {
-      console.warn('Error deleting document from IndexedDB:', err);
+  const deferredDeleteControllerRef = useRef<ReturnType<typeof createDeferredDeleteController> | null>(null);
+  if (!deferredDeleteControllerRef.current) {
+    deferredDeleteControllerRef.current = createDeferredDeleteController({
+      delayMs: HISTORY_DELETE_UNDO_MS + 150,
+      onCommit: (docId) => {
+        documentStorageService.deleteDocument(docId).catch((err) => {
+          console.warn('Error deleting document from IndexedDB:', err);
+        });
+      },
     });
+  }
 
+  useEffect(() => {
+    const flushPendingDelete = () => {
+      deferredDeleteControllerRef.current?.flush();
+    };
+    window.addEventListener('beforeunload', flushPendingDelete);
+    window.addEventListener('pagehide', flushPendingDelete);
+    return () => {
+      window.removeEventListener('beforeunload', flushPendingDelete);
+      window.removeEventListener('pagehide', flushPendingDelete);
+      flushPendingDelete();
+    };
+  }, []);
+
+  const handleDeleteDocument = useCallback((id: string) => {
+    const currentDocs = savedDocsRef.current;
+    const originalIndex = currentDocs.findIndex((d) => d.id === id);
+    const targetDoc = originalIndex >= 0 ? currentDocs[originalIndex] : null;
+
+    if (!targetDoc) {
+      documentStorageService.deleteDocument(id).catch((err) => {
+        console.warn('Error deleting document from IndexedDB:', err);
+      });
+      return;
+    }
+
+    // Immediately hide from Reading History, deferring IndexedDB removal until Undo expires
     setSavedDocs((prev) => {
       const filtered = prev.filter((d) => d.id !== id);
       try {
@@ -1015,7 +1056,37 @@ export default function App() {
       }
       return filtered;
     });
-  }, []);
+
+    const controller = deferredDeleteControllerRef.current;
+    controller?.schedule({ doc: targetDoc, originalIndex });
+
+    const displayTitle = formatHistoryToastTitle(targetDoc.title);
+    showToast(`Removed "${displayTitle}" from history`, {
+      actionLabel: 'Undo',
+      actionTitle: 'Undo delete',
+      durationMs: HISTORY_DELETE_UNDO_MS,
+      bypassDnd: true,
+      onAction: () => {
+        const restored = controller?.undo(id);
+        if (!restored) return;
+
+        setSavedDocs((prev) => {
+          const next = restoreHistoryDocument(prev, restored.doc, restored.originalIndex);
+          try {
+            safeStorage.setItem(STORAGE_KEYS.SAVED_DOCS, JSON.stringify(next));
+          } catch {
+            // Ignore
+          }
+          return next;
+        });
+
+        showToast(`Restored "${displayTitle}" to history`, {
+          durationMs: 2500,
+          bypassDnd: true,
+        });
+      },
+    });
+  }, [showToast]);
 
   // Debounced persistence for currentIndex to prevent disk I/O thrashing during 5-10 words/sec RSVP playback
   const indexSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -1237,6 +1308,7 @@ export default function App() {
       setCanUndoRestart(true);
       showToast(`Restarted from beginning (was at word ${previousIndex + 1})`, {
         actionLabel: 'Undo',
+        actionTitle: 'Undo restart (Ctrl/Cmd + Z)',
         onAction: () => {
           const snap = restartUndoRef.current;
           if (!snap || snap.documentId !== activeDocId) return;
@@ -1532,7 +1604,7 @@ export default function App() {
   return (
     <div 
       id="adhd-reader-app"
-      className={`h-screen max-h-screen overflow-hidden flex flex-col ${currentThemeConfig.bgClass} ${currentThemeConfig.textPrimary} transition-colors duration-200 select-none`}
+      className={`h-screen max-h-screen overflow-hidden flex flex-col ${currentThemeConfig.bgClass} ${currentThemeConfig.textPrimary} transition-colors duration-200`}
     >
       {/* Toast Notification (with optional Undo action) */}
       {toastNotification && (
@@ -1540,7 +1612,7 @@ export default function App() {
           id="app-toast-notification"
           role="status"
           aria-live="polite"
-          className="fixed top-16 right-4 z-50 flex items-center gap-3 px-4 py-2.5 rounded-xl bg-slate-900 border border-red-500/50 text-white shadow-2xl animate-in slide-in-from-top-2 duration-200"
+          className="fixed top-16 right-4 z-[70] flex items-center gap-3 px-4 py-2.5 rounded-xl bg-slate-900 border border-red-500/50 text-white shadow-2xl animate-in slide-in-from-top-2 duration-200"
         >
           <Zap className="w-4 h-4 text-red-500 fill-red-500 animate-pulse shrink-0" />
           <span className="text-xs font-semibold">{toastNotification.message}</span>
@@ -1549,8 +1621,8 @@ export default function App() {
               id="toast-undo-btn"
               type="button"
               onClick={toastNotification.onAction}
-              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-red-500 hover:bg-red-400 text-white text-xs font-bold transition-colors cursor-pointer shrink-0"
-              title="Undo restart (Ctrl/Cmd + Z)"
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-red-500 hover:bg-red-400 text-white text-xs font-bold transition-colors cursor-pointer shrink-0 select-none"
+              title={toastNotification.actionTitle || toastNotification.actionLabel}
             >
               <Undo2 className="w-3.5 h-3.5" />
               <span>{toastNotification.actionLabel}</span>

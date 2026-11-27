@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "ADHD Reader - RSVP & Focus Highlighter",
+  "name": "Khoroos Reader",
   "version": "1.0.0",
   "description": "Word-by-word RSVP focus reader highlighting the two middle letters in red. Capture highlighted text from any webpage with one click.",
   "permissions": [
@@ -31,6 +31,7 @@
         "espeak-ng.wasm",
         "espeak-data/*",
         "fa_IR-amir-medium.onnx.json",
+        "pdf.worker.min.mjs",
         "assets/*"
       ],
       "matches": ["<all_urls>"]
@@ -38,7 +39,7 @@
   ],
   "action": {
     "default_popup": "index.html",
-    "default_title": "ADHD Reader",
+    "default_title": "Khoroos Reader",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",
@@ -63,7 +64,7 @@
         "default": "Alt+R",
         "mac": "Alt+R"
       },
-      "description": "Capture highlighted text from webpage and read in ADHD Reader"
+      "description": "Capture highlighted text from webpage and read in Khoroos Reader"
     }
   },
   "icons": {

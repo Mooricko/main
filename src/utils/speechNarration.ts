@@ -468,7 +468,7 @@ class SpeechNarrationService {
 
       const samplePhrase = isFarsi 
         ? "سامانه خوانش صوتی و فوکوس کلمه به کلمه آماده است."
-        : "ADHD Reader audio narration is active. Ready to focus.";
+        : "Khoroos Reader audio narration is active. Ready to focus.";
 
       const utterance = new SpeechSynthesisUtterance(samplePhrase);
       activeUtterances.add(utterance);
