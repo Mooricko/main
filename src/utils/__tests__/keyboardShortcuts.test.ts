@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   resolveKeyboardShortcut,
+  shouldHandleGlobalPaste,
+  isEditableTextTarget,
   ShortcutContext,
   ShortcutKeyEventLike,
 } from '../keyboardShortcuts';
@@ -106,9 +108,22 @@ test('browser modifier shortcuts (Ctrl/Cmd/Alt) never fall through to single-key
     resolveKeyboardShortcut(keyEvent({ key: 'o', code: 'KeyO', metaKey: true }), defaultCtx),
     { type: 'open_input_hub' }
   );
-  assert.deepEqual(
+
+  // Ctrl/Cmd+V must NOT be intercepted on keydown so the browser's native paste event fires
+  assert.equal(
     resolveKeyboardShortcut(keyEvent({ key: 'v', code: 'KeyV', ctrlKey: true }), defaultCtx),
-    { type: 'paste_clipboard' }
+    null
+  );
+  assert.equal(
+    resolveKeyboardShortcut(keyEvent({ key: 'v', code: 'KeyV', metaKey: true }), defaultCtx),
+    null
+  );
+  assert.equal(
+    resolveKeyboardShortcut(
+      keyEvent({ key: 'V', code: 'KeyV', ctrlKey: true, shiftKey: true }),
+      defaultCtx
+    ),
+    null
   );
 });
 
@@ -167,3 +182,36 @@ test('single-key reader shortcuts do not fire while a modal or drawer is open', 
     { type: 'toggle_shortcuts' }
   );
 });
+
+test('global paste handles non-text targets and skips editable text fields', () => {
+  // Non-text elements should be handled by global paste
+  assert.equal(shouldHandleGlobalPaste({ tagName: 'BODY' }), true);
+  assert.equal(shouldHandleGlobalPaste({ tagName: 'DIV' }), true);
+  assert.equal(shouldHandleGlobalPaste({ tagName: 'BUTTON' }), true);
+  assert.equal(shouldHandleGlobalPaste({ tagName: 'INPUT', type: 'range' }), true);
+  assert.equal(shouldHandleGlobalPaste({ tagName: 'INPUT', type: 'checkbox' }), true);
+  assert.equal(shouldHandleGlobalPaste({ tagName: 'INPUT', type: 'button' }), true);
+  assert.equal(shouldHandleGlobalPaste(null), true);
+
+  // Text-entry elements should handle native paste themselves
+  assert.equal(shouldHandleGlobalPaste({ tagName: 'TEXTAREA' }), false);
+  assert.equal(shouldHandleGlobalPaste({ tagName: 'INPUT', type: 'text' }), false);
+  assert.equal(shouldHandleGlobalPaste({ tagName: 'INPUT', type: 'url' }), false);
+  assert.equal(shouldHandleGlobalPaste({ tagName: 'INPUT', type: 'search' }), false);
+  assert.equal(shouldHandleGlobalPaste({ tagName: 'INPUT' }), false);
+  assert.equal(shouldHandleGlobalPaste({ tagName: 'DIV', isContentEditable: true }), false);
+  assert.equal(
+    shouldHandleGlobalPaste({
+      tagName: 'SPAN',
+      closest: (sel: string) => (sel === '[contenteditable="true"]' ? {} : null),
+    }),
+    false
+  );
+  assert.equal(
+    isEditableTextTarget({
+      parentElement: { tagName: 'DIV', isContentEditable: true },
+    }),
+    true
+  );
+});
+

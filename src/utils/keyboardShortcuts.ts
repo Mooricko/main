@@ -19,7 +19,6 @@ export interface ShortcutContext {
 
 export type ShortcutAction =
   | { type: 'open_input_hub' }
-  | { type: 'paste_clipboard' }
   | { type: 'undo_restart' }
   | { type: 'font_decrease' }
   | { type: 'font_increase' }
@@ -70,14 +69,11 @@ export function resolveKeyboardShortcut(
     if (lower === 'o' && !e.shiftKey) {
       return { type: 'open_input_hub' };
     }
-    if (lower === 'v' && !e.shiftKey) {
-      return { type: 'paste_clipboard' };
-    }
     if (lower === 'z' && !e.shiftKey && ctx.canUndoRestart) {
       return { type: 'undo_restart' };
     }
-    // Never let browser shortcuts (Ctrl/Cmd+R, Ctrl/Cmd+F, Ctrl/Cmd+S, Ctrl/Cmd+T, etc.)
-    // fall through to single-key reader shortcuts.
+    // Never intercept native browser shortcuts (Ctrl/Cmd+V paste, Ctrl/Cmd+R, Ctrl/Cmd+F,
+    // Ctrl/Cmd+S, Ctrl/Cmd+T, etc.) or let them fall through to single-key reader shortcuts.
     return null;
   }
 
@@ -182,3 +178,61 @@ export function extractShortcutKeyEvent(e: KeyboardEvent): ShortcutKeyEventLike 
     isContentEditable,
   };
 }
+
+export interface PasteTargetLike {
+  tagName?: string;
+  type?: string;
+  isContentEditable?: boolean;
+  closest?: (selector: string) => unknown;
+  parentElement?: PasteTargetLike | null;
+}
+
+const NON_TEXT_INPUT_TYPES = new Set([
+  'button',
+  'checkbox',
+  'color',
+  'file',
+  'hidden',
+  'image',
+  'radio',
+  'range',
+  'reset',
+  'submit',
+]);
+
+/**
+ * Returns true if the event target is a text-entry control (text input, textarea,
+ * or contenteditable element) that should handle native clipboard paste itself.
+ */
+export function isEditableTextTarget(target: PasteTargetLike | EventTarget | null): boolean {
+  if (!target || typeof target !== 'object') return false;
+  const el = target as PasteTargetLike;
+
+  // Handle Text nodes inside a contenteditable host
+  if (!el.tagName && el.parentElement) {
+    return isEditableTextTarget(el.parentElement);
+  }
+
+  if (el.isContentEditable) return true;
+  if (typeof el.closest === 'function' && el.closest('[contenteditable="true"]')) {
+    return true;
+  }
+
+  const tag = (el.tagName || '').toUpperCase();
+  if (tag === 'TEXTAREA') return true;
+  if (tag === 'INPUT') {
+    const inputType = (el.type || 'text').toLowerCase();
+    return !NON_TEXT_INPUT_TYPES.has(inputType);
+  }
+
+  return false;
+}
+
+/**
+ * Returns true when a global window `paste` event occurred outside a text field
+ * so the reader can capture clipboard content into the Universal Input Hub.
+ */
+export function shouldHandleGlobalPaste(target: PasteTargetLike | EventTarget | null): boolean {
+  return !isEditableTextTarget(target);
+}
+

@@ -72,7 +72,11 @@ import {
 } from './services/document/readingHistory';
 import { hasDragDataFromOutside, extractLinkFromDataTransfer } from './services/import/detectInput';
 import { extractClipboardContent } from './services/import/extractText';
-import { resolveKeyboardShortcut, extractShortcutKeyEvent } from './utils/keyboardShortcuts';
+import {
+  resolveKeyboardShortcut,
+  extractShortcutKeyEvent,
+  shouldHandleGlobalPaste,
+} from './utils/keyboardShortcuts';
 import { CheckCircle2, Zap, Upload, Undo2 } from 'lucide-react';
 
 const DEFAULT_SETTINGS: ReaderSettings = {
@@ -1298,46 +1302,6 @@ export default function App() {
           setIsSidebarOpen(true);
           return;
 
-        case 'paste_clipboard':
-          e.preventDefault();
-          setSidebarActiveTab('input');
-          setIsSidebarOpen(true);
-          if (navigator?.clipboard) {
-            (async () => {
-              try {
-                let plain = '';
-                let html = '';
-                if (navigator.clipboard.read) {
-                  try {
-                    const items = await navigator.clipboard.read();
-                    for (const item of items) {
-                      if (item.types.includes('text/html')) {
-                        html = await (await item.getType('text/html')).text();
-                      }
-                      if (item.types.includes('text/plain')) {
-                        plain = await (await item.getType('text/plain')).text();
-                      }
-                    }
-                  } catch {
-                    // Fall back
-                  }
-                }
-                if (!plain && navigator.clipboard.readText) {
-                  plain = await navigator.clipboard.readText();
-                }
-                const extracted = extractClipboardContent(html, plain);
-                const textToUse = (extracted && extracted.trim()) ? extracted.trim() : (plain && plain.trim() ? plain.trim() : '');
-                if (textToUse) {
-                  setPendingDroppedText(textToUse);
-                  showToast('📋 Loaded clipboard text into Universal Input Hub');
-                }
-              } catch {
-                // Ignore clipboard permission failures
-              }
-            })();
-          }
-          return;
-
         case 'undo_restart':
           e.preventDefault();
           handleUndoRestart();
@@ -1469,6 +1433,63 @@ export default function App() {
     handleUpdateSettings,
     showToast,
   ]);
+
+  // Global Paste Handler: captures native Ctrl/Cmd+V (and Edit > Paste) outside text fields
+  // directly from ClipboardEvent.clipboardData without swallowing keydown or requiring clipboard permissions.
+  useEffect(() => {
+    const handleGlobalPaste = (e: ClipboardEvent) => {
+      if (!shouldHandleGlobalPaste(e.target)) {
+        return;
+      }
+
+      const clipboardData = e.clipboardData;
+      if (!clipboardData) return;
+
+      const html = clipboardData.getData('text/html') || '';
+      const plain = clipboardData.getData('text/plain') || '';
+      const extracted = extractClipboardContent(html, plain);
+      const textToUse =
+        extracted && extracted.trim()
+          ? extracted.trim()
+          : plain && plain.trim()
+            ? plain.trim()
+            : '';
+
+      if (textToUse) {
+        e.preventDefault();
+        setIsSettingsOpen(false);
+        setIsShortcutsOpen(false);
+        setIsExtensionHubOpen(false);
+        setIsTimerModalOpen(false);
+        setIsMilestoneModalOpen(false);
+        setIsStatsModalOpen(false);
+        setSidebarActiveTab('input');
+        setIsSidebarOpen(true);
+        setPendingDroppedText(textToUse);
+        showToast('📋 Loaded clipboard text into Universal Input Hub');
+        return;
+      }
+
+      const pastedFile =
+        clipboardData.files && clipboardData.files.length > 0 ? clipboardData.files[0] : null;
+      if (pastedFile) {
+        e.preventDefault();
+        setIsSettingsOpen(false);
+        setIsShortcutsOpen(false);
+        setIsExtensionHubOpen(false);
+        setIsTimerModalOpen(false);
+        setIsMilestoneModalOpen(false);
+        setIsStatsModalOpen(false);
+        setSidebarActiveTab('input');
+        setIsSidebarOpen(true);
+        setPendingDroppedFile(pastedFile);
+        showToast(`📄 Loaded ${pastedFile.name} into Universal Input Hub`);
+      }
+    };
+
+    window.addEventListener('paste', handleGlobalPaste);
+    return () => window.removeEventListener('paste', handleGlobalPaste);
+  }, [showToast]);
 
   const isIdle = useControlsIdle({
     isPlaying,

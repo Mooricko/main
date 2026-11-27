@@ -263,6 +263,7 @@ export const InputHub: React.FC<InputHubProps> = ({
         handleImportUrl(textToProcess);
       } else {
         setPastedText(textToProcess);
+        setTimeout(() => textareaRef.current?.focus(), 0);
       }
     }
   }, [initialDroppedText]);
