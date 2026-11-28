@@ -49,7 +49,8 @@ export interface ReaderSettings {
   speechPitch: number; // 0.5 to 1.5 (default 1.0)
   speechVolume: number; // 0 to 1 (default 1.0)
   speechRateMultiplier: number; // Fine-tuning rate multiplier (0.7 to 1.3, default 1.0)
-  farsiTtsEngine?: 'espeak' | 'piper' | 'custom'; // Offline Farsi TTS: eSpeak NG WASM, Piper ONNX, or user's own endpoint
+  farsiTtsEngine?: 'espeak' | 'piper' | 'tiny-ava' | 'custom'; // Offline Farsi TTS: eSpeak NG WASM, Piper ONNX, tiny-ava v2 ONNX, or user's own endpoint
+  tinyAvaVoice?: 'parisa' | 'mana' | 'maya'; // tiny-ava v2 speaker: parisa (default), mana, or maya (EN)
   farsiTtsSpeed?: number; // 0.5 to 2.0 (default 1.0)
   farsiTtsPitch?: number; // 0.6 to 1.4 (default 1.0)
   doNotDisturb: boolean; // Turns off all notifications when timer is set

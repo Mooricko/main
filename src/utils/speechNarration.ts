@@ -432,6 +432,18 @@ class SpeechNarrationService {
   ): void {
     this.stop();
 
+    if (voiceURI === 'farsi-tiny-ava' || voiceURI.startsWith('farsi-tiny-ava-')) {
+      const suffix = voiceURI.startsWith('farsi-tiny-ava-')
+        ? voiceURI.slice('farsi-tiny-ava-'.length)
+        : '';
+      const voice =
+        suffix === 'parisa' || suffix === 'mana' || suffix === 'maya'
+          ? suffix
+          : farsiOfflineTts.getTinyAvaVoice();
+      farsiOfflineTts.preview('tiny-ava', rate, pitch, volume, undefined, undefined, voice);
+      return;
+    }
+
     if (voiceURI === 'farsi-piper-neural') {
       farsiOfflineTts.preview('piper', rate, pitch, volume);
       return;
@@ -707,16 +719,25 @@ class SpeechNarrationService {
       return;
     }
 
-    // 2. Check if chunk is Farsi / RTL
-    const isFarsi = isRtlText(chunkText) || (Boolean(settings.speechVoiceURI) && (settings.speechVoiceURI === 'farsi-piper-neural' || settings.speechVoiceURI === 'farsi-espeak-wasm' || settings.speechVoiceURI === 'farsi-offline'));
-    const detectedLang = isFarsi ? 'fa-IR' : detectLanguageFromText(chunkText);
+    // 2. Check if chunk is Farsi / RTL or explicitly routed to offline Farsi/bilingual tiny-ava
+    const isExplicitTinyAvaVoice =
+      Boolean(settings.speechVoiceURI) &&
+      (settings.speechVoiceURI === 'farsi-tiny-ava' || settings.speechVoiceURI.startsWith('farsi-tiny-ava-'));
 
     const isExplicitFarsiOfflineVoice =
       settings.speechVoiceURI === 'farsi-piper-neural' ||
       settings.speechVoiceURI === 'farsi-espeak-wasm' ||
-      settings.speechVoiceURI === 'farsi-offline';
+      settings.speechVoiceURI === 'farsi-offline' ||
+      isExplicitTinyAvaVoice;
+
+    const isFarsi = isRtlText(chunkText) || isExplicitFarsiOfflineVoice;
+    const detectedLang = isFarsi ? 'fa-IR' : detectLanguageFromText(chunkText);
 
     const isFarsiContent = isFarsi || detectedLang === 'fa-IR';
+    const isTinyAvaBilingual =
+      (settings.farsiTtsEngine === 'tiny-ava' &&
+        (settings.tinyAvaVoice === 'maya' || isExplicitTinyAvaVoice)) ||
+      isExplicitTinyAvaVoice;
 
     const resolvedVoice = this.resolveVoice(settings.speechVoiceURI, detectedLang);
     const hasSystemFarsiVoice = Boolean(
@@ -728,6 +749,7 @@ class SpeechNarrationService {
     );
 
     const shouldUseFarsiOfflineTts =
+      isTinyAvaBilingual ||
       (isFarsiContent && (
         isExplicitFarsiOfflineVoice ||
         Boolean(settings.farsiTtsEngine) ||
@@ -1061,6 +1083,11 @@ class SpeechNarrationService {
 
     if (isCustomEndpoint) {
       engine = 'custom';
+    } else if (
+      settings.speechVoiceURI === 'farsi-tiny-ava' ||
+      settings.speechVoiceURI?.startsWith('farsi-tiny-ava-')
+    ) {
+      engine = 'tiny-ava';
     } else if (settings.speechVoiceURI === 'farsi-piper-neural') {
       engine = 'piper';
     } else if (settings.speechVoiceURI === 'farsi-espeak-wasm') {
@@ -1072,6 +1099,7 @@ class SpeechNarrationService {
     }
 
     const isChunkFarsi = isRtlText(chunkText) || detectLanguageFromText(chunkText) === 'fa-IR';
+    const selectedTinyAvaVoice = settings.tinyAvaVoice || farsiOfflineTts.getTinyAvaVoice();
 
     const currentWpm = getCurrentWpm ? getCurrentWpm() : settings.wpm;
     const wpmMultiplier = currentWpm / 160;
@@ -1084,6 +1112,7 @@ class SpeechNarrationService {
     try {
       synthResult = await farsiOfflineTts.synthesize(chunkText, {
         engine,
+        voice: engine === 'tiny-ava' ? selectedTinyAvaVoice : undefined,
         speed: effectiveSpeed,
         pitch: effectivePitch,
         volume: effectiveVolume,

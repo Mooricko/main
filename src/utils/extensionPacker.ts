@@ -37,7 +37,7 @@ export async function downloadExtensionPackage(): Promise<void> {
 
   // 2. Fetch extension background, content scripts, offscreen document, PDF worker & offline TTS engine bundle
   try {
-    const [contentJs, contentCss, bgJs, offscreenHtml, offscreenJs, ortJs, ttsBundleJs, pdfWorkerMjs] = await Promise.all([
+    const [contentJs, contentCss, bgJs, offscreenHtml, offscreenJs, ortJs, ttsBundleJs, pdfWorkerMjs, tinyAvaJson] = await Promise.all([
       fetch('./content.js').then((r) => r.ok ? r.text() : ''),
       fetch('./content.css').then((r) => r.ok ? r.text() : ''),
       fetch('./background.js').then((r) => r.ok ? r.text() : ''),
@@ -46,6 +46,7 @@ export async function downloadExtensionPackage(): Promise<void> {
       fetch('./ort.min.js').then((r) => r.ok ? r.text() : ''),
       fetch('./tts-engine.bundle.js').then((r) => r.ok ? r.text() : ''),
       fetch('./pdf.worker.min.mjs').then((r) => r.ok ? r.text() : ''),
+      fetch('./tiny-ava-v2.json').then((r) => r.ok ? r.text() : ''),
     ]);
 
     if (contentJs) zip.file('content.js', contentJs);
@@ -56,6 +57,19 @@ export async function downloadExtensionPackage(): Promise<void> {
     if (ortJs) zip.file('ort.min.js', ortJs);
     if (ttsBundleJs) zip.file('tts-engine.bundle.js', ttsBundleJs);
     if (pdfWorkerMjs) zip.file('pdf.worker.min.mjs', pdfWorkerMjs);
+    if (tinyAvaJson) zip.file('tiny-ava-v2.json', tinyAvaJson);
+
+    const wasmFolder = zip.folder('wasm');
+    const [ortWasmRes, ortMjsRes] = await Promise.all([
+      fetch('./wasm/ort-wasm-simd-threaded.wasm').catch(() => null),
+      fetch('./wasm/ort-wasm-simd-threaded.mjs').catch(() => null),
+    ]);
+    if (ortWasmRes && ortWasmRes.ok) {
+      wasmFolder?.file('ort-wasm-simd-threaded.wasm', await ortWasmRes.blob());
+    }
+    if (ortMjsRes && ortMjsRes.ok) {
+      wasmFolder?.file('ort-wasm-simd-threaded.mjs', await ortMjsRes.text());
+    }
   } catch (err) {
     console.warn('Failed to fetch extension scripts:', err);
   }

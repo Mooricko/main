@@ -353,3 +353,117 @@ export async function playAudioBlob(
   return { stop: () => {} };
 }
 
+/**
+ * Plays a mono Float32Array waveform directly through the Web Audio API at the
+ * exact synthesis sample rate (e.g. 24000 Hz for tiny-ava) without intermediate
+ * WAV encoding/decoding overhead. Releases AudioBuffer references on stop/end.
+ */
+export async function playPcmFloat32WebAudio(
+  samples: Float32Array,
+  sampleRate: number = 24000,
+  options: {
+    volume?: number;
+    audioContext?: AudioContext;
+    onStart?: () => void;
+    onEnd?: () => void;
+    onError?: (err: any) => void;
+  } = {}
+): Promise<AudioPlaybackHandle> {
+  const volume = Math.max(0, Math.min(1, options.volume ?? 1.0));
+
+  if (!samples || samples.length === 0) {
+    options.onStart?.();
+    options.onEnd?.();
+    return { stop: () => {} };
+  }
+
+  const AudioContextClass =
+    typeof (globalThis as any).AudioContext !== 'undefined'
+      ? (globalThis as any).AudioContext
+      : typeof window !== 'undefined'
+        ? (window as any).webkitAudioContext
+        : undefined;
+
+  if (!options.audioContext && !AudioContextClass) {
+    // Non-browser environment (e.g., Node unit tests without AudioContext mock)
+    options.onStart?.();
+    options.onEnd?.();
+    return { stop: () => {} };
+  }
+
+  const ownsContext = !options.audioContext;
+  let ctx: AudioContext | null = null;
+  let source: AudioBufferSourceNode | null = null;
+  let gain: GainNode | null = null;
+  let isFinished = false;
+
+  try {
+    ctx = options.audioContext || new AudioContextClass({ sampleRate });
+    if (ctx && ctx.state === 'suspended' && typeof ctx.resume === 'function') {
+      await ctx.resume();
+    }
+
+    const audioBuffer = ctx!.createBuffer(1, samples.length, sampleRate);
+    if (typeof audioBuffer.copyToChannel === 'function') {
+      audioBuffer.copyToChannel(samples, 0);
+    } else {
+      audioBuffer.getChannelData(0).set(samples);
+    }
+
+    source = ctx!.createBufferSource();
+    source.buffer = audioBuffer;
+
+    gain = ctx!.createGain();
+    gain.gain.value = volume;
+
+    source.connect(gain);
+    gain.connect(ctx!.destination);
+
+    const releaseNodes = () => {
+      if (source) {
+        source.onended = null;
+        try { source.disconnect(); } catch {}
+        try { source.buffer = null; } catch {}
+        source = null;
+      }
+      if (gain) {
+        try { gain.disconnect(); } catch {}
+        gain = null;
+      }
+      if (ownsContext && ctx && typeof ctx.close === 'function') {
+        try { ctx.close(); } catch {}
+        ctx = null;
+      }
+    };
+
+    const stop = () => {
+      if (isFinished) return;
+      isFinished = true;
+      if (source) {
+        source.onended = null;
+        try { source.stop(); } catch {}
+      }
+      releaseNodes();
+    };
+
+    source.onended = () => {
+      if (isFinished) return;
+      isFinished = true;
+      releaseNodes();
+      options.onEnd?.();
+    };
+
+    options.onStart?.();
+    source.start(0);
+    return { stop };
+  } catch (err) {
+    isFinished = true;
+    if (ownsContext && ctx && typeof ctx.close === 'function') {
+      try { ctx.close(); } catch {}
+    }
+    options.onError?.(err);
+    return { stop: () => {} };
+  }
+}
+
+

@@ -16,7 +16,7 @@ async function bundleTts() {
     globalName: 'AdhdReaderTts',
     platform: 'browser',
     target: 'es2020',
-    external: ['node:*', 'module', 'fs', 'path', 'onnxruntime-web'],
+    external: ['node:*', 'module', 'fs', 'path', 'onnxruntime-web', 'onnxruntime-web/wasm'],
     sourcemap: false,
     minify: false,
   });

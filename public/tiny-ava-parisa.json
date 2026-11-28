@@ -1,0 +1,18 @@
+{
+  "sample_rate": 24000,
+  "hop": 256,
+  "voices": ["parisa"],
+  "symbols": [
+    "<pad>", "<bos>", "<eos>", "<sp>", "<unk>",
+    "،", ".", "؟", "!", "؛", ":", "«", "»", "(", ")", "—", "…",
+    "p", "b", "t", "d", "k", "ɡ", "q", "ʔ", "f", "v", "s", "z", "ʃ", "ʒ", "x", "h", "tʃ", "dʒ", "m", "n", "l", "r", "j",
+    "a", "e", "o", "i", "u", "ɑ"
+  ],
+  "max_tokens": 512,
+  "max_frames": 3000,
+  "step": 104000,
+  "frontend": "persian-g2p",
+  "frontend_fingerprint": "f8c95de34b918211b7071d156dca1693a50f804ba7db4bf76c631983f1fb9845",
+  "inputs": ["tokens", "stress", "voice", "speed", "pitch_shift", "pitch_range"],
+  "outputs": ["audio", "durations"]
+}

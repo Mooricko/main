@@ -27,7 +27,7 @@ import { THEME_CONFIGS, HIGHLIGHT_COLORS } from '../utils/themeStyles';
 import { downloadExtensionPackage } from '../utils/extensionPacker';
 import { isChromeExtensionEnvironment, captureActiveTabText } from '../utils/extensionBridge';
 import { farsiOfflineTts, SAMPLE_FARSI_TEXT } from '../services/tts/farsiOfflineTTS';
-import { PiperCacheInfo, FarsiTtsEngineType } from '../services/tts/types';
+import { PiperCacheInfo, TinyAvaCacheInfo, TinyAvaVoiceId, FarsiTtsEngineType } from '../services/tts/types';
 import { useDialogFocusTrap } from '../hooks/useDialogFocusTrap';
 
 const KEYBOARD_SHORTCUTS = [
@@ -81,9 +81,17 @@ export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
 
   // Offline Farsi TTS Testing State
   const [activeEngine, setActiveEngine] = useState<FarsiTtsEngineType>('espeak');
+  const [tinyAvaVoice, setTinyAvaVoice] = useState<TinyAvaVoiceId>('parisa');
   const [piperCache, setPiperCache] = useState<PiperCacheInfo>({
     status: 'not_cached',
     modelName: 'fa_IR-amir-medium',
+    sizeBytes: 0,
+    downloadProgress: 0,
+    isOfflineReady: false
+  });
+  const [tinyAvaCache, setTinyAvaCache] = useState<TinyAvaCacheInfo>({
+    status: 'not_cached',
+    modelName: 'tiny-ava-v2',
     sizeBytes: 0,
     downloadProgress: 0,
     isOfflineReady: false
@@ -95,10 +103,17 @@ export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
 
   useEffect(() => {
     setActiveEngine(farsiOfflineTts.getActiveEngine());
-    const unsub = farsiOfflineTts.subscribePiperCache((info) => {
+    setTinyAvaVoice(farsiOfflineTts.getTinyAvaVoice());
+    const unsubPiper = farsiOfflineTts.subscribePiperCache((info) => {
       setPiperCache(info);
     });
-    return unsub;
+    const unsubTinyAva = farsiOfflineTts.subscribeTinyAvaCache((info) => {
+      setTinyAvaCache(info);
+    });
+    return () => {
+      unsubPiper();
+      unsubTinyAva();
+    };
   }, []);
 
   useEffect(() => {
@@ -706,7 +721,8 @@ export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
       ▼
 [ Offscreen Document (offscreen.html + offscreen.js) ]
       ├─► موتور ۱: eSpeak NG WASM (سبک، رباتیک، بارگذاری آنی < 5MB)
-      └─► موتور ۲: ONNX Runtime Web + Piper fa_IR (عصبی، طبیعی، کش IndexedDB)
+      ├─► موتور ۲: ONNX Runtime Web + Piper fa_IR (عصبی، طبیعی، کش IndexedDB)
+      └─► موتور ۳: ONNX Runtime Web + tiny-ava v2 (پریسا / مانا / مایا دوزبانه 24kHz)
       │
       ▼
 [ Audio Player (HTML5 AudioContext / Audio Element در سند برون‌صفحه) ]`}
@@ -714,7 +730,7 @@ export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
               </div>
 
               {/* Interactive Engine Selection & Testing Card */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 {/* Engine 1: eSpeak NG */}
                 <div 
                   onClick={() => {
@@ -738,7 +754,6 @@ export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
                     <li>• حجم سبک: کمتر از ۵ مگابایت</li>
                     <li>• بارگذاری بلادرنگ بدون نیاز به دانلود اولیه</li>
                     <li>• صدای شبیه‌سازی‌شده رباتیک آکوستیک</li>
-                    <li>• مناسب سیستم‌های با پردازنده ضعیف</li>
                   </ul>
                   <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/20">
                     وضعیت: آماده برای پخش آنی
@@ -760,36 +775,103 @@ export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-sm font-bold text-white flex items-center gap-2">
                       <Sparkles className="w-4 h-4 text-purple-400" />
-                      Piper Neural (ONNX Web)
+                      Piper Neural
                     </span>
                     {activeEngine === 'piper' && <CheckCircle2 className="w-4 h-4 text-red-500" />}
                   </div>
                   <ul className="text-xs text-slate-400 space-y-1 mb-3">
-                    <li>• کیفیت صدای عصبی و انسانی بالا (مدل fa_IR-amir)</li>
-                    <li>• ذخیره ۱۰۰٪ آفلاین در IndexedDB مرورگر</li>
-                    <li>• شتاب‌دهی WebAssembly SIMD / WebGPU</li>
-                    <li>• فال‌بک خودکار به eSpeak در صورت عدم دانلود</li>
+                    <li>• صدای عصبی انسانی (fa_IR-amir)</li>
+                    <li>• ذخیره ۱۰۰٪ آفلاین در IndexedDB</li>
+                    <li>• فال‌بک خودکار به eSpeak</li>
                   </ul>
                   <div className="flex items-center gap-2">
                     {piperCache.isOfflineReady ? (
                       <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">
-                        وضعیت: در حافظه ذخیره شد (آفلاین)
+                        وضعیت: آماده آفلاین
                       </span>
                     ) : (
                       <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">
-                        وضعیت: نیاز به دانلود (~25MB)
+                        نیاز به دانلود (~25MB)
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Engine 3: tiny-ava v2 */}
+                <div 
+                  onClick={() => {
+                    setActiveEngine('tiny-ava');
+                    farsiOfflineTts.setEngine('tiny-ava');
+                  }}
+                  className={`p-4 rounded-xl border cursor-pointer transition-all ${
+                    activeEngine === 'tiny-ava'
+                      ? 'border-red-500 bg-red-500/10 ring-1 ring-red-500/30'
+                      : 'border-white/10 bg-black/20 hover:border-white/20'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-bold text-white flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-rose-400" />
+                      tiny-ava v2
+                    </span>
+                    {activeEngine === 'tiny-ava' && <CheckCircle2 className="w-4 h-4 text-red-500" />}
+                  </div>
+                  <ul className="text-xs text-slate-400 space-y-1 mb-3">
+                    <li>• ۳ صدا: پریسا، مانا، مایا (دوزبانه)</li>
+                    <li>• G2P بومی فارسی + خروجی 24kHz</li>
+                    <li>• ذخیره ۱۰۰٪ آفلاین در IndexedDB</li>
+                  </ul>
+                  <div className="flex items-center gap-2">
+                    {tinyAvaCache.isOfflineReady ? (
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">
+                        وضعیت: آماده آفلاین
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">
+                        نیاز به دانلود (~46MB)
                       </span>
                     )}
                   </div>
                 </div>
               </div>
 
-              {/* Piper Cache Management & Testing Console */}
+              {/* Model Cache Management & Testing Console */}
               <div className="p-4 rounded-xl border border-white/10 bg-black/30 space-y-3">
+                {activeEngine === 'tiny-ava' && (
+                  <div className="flex items-center justify-between flex-wrap gap-2 pb-2 border-b border-white/5">
+                    <span className="text-xs font-semibold text-slate-200">گوینده tiny-ava v2:</span>
+                    <div className="flex items-center gap-1.5">
+                      {([
+                        { id: 'parisa' as const, label: 'Parisa (پریسا)' },
+                        { id: 'mana' as const, label: 'Mana (مانا)' },
+                        { id: 'maya' as const, label: 'Maya (مایا EN)' },
+                      ]).map((v) => (
+                        <button
+                          key={v.id}
+                          type="button"
+                          onClick={() => {
+                            setTinyAvaVoice(v.id);
+                            farsiOfflineTts.setTinyAvaVoice(v.id);
+                          }}
+                          className={`px-2.5 py-1 rounded-lg border text-xs font-medium transition-colors cursor-pointer ${
+                            tinyAvaVoice === v.id
+                              ? 'border-red-500 bg-red-500/15 text-red-300'
+                              : 'border-slate-700 bg-black/30 text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          {v.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <div className="space-y-0.5">
                     <div className="text-xs font-bold text-slate-200">
-                      کنترل کش و دانلود مدل Piper Farsi
+                      {activeEngine === 'tiny-ava'
+                        ? 'کنترل کش و دانلود مدل tiny-ava v2'
+                        : 'کنترل کش و دانلود مدل Piper Farsi'}
                     </div>
                     <div className="text-[11px] text-slate-400">
                       پس از یک‌بار دانلود، مدل بدون نیاز به اینترنت در حافظه مرورگر باقی می‌ماند.
@@ -797,7 +879,43 @@ export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
                   </div>
 
                   <div className="flex items-center gap-2">
-                    {!piperCache.isOfflineReady ? (
+                    {activeEngine === 'tiny-ava' ? (
+                      !tinyAvaCache.isOfflineReady ? (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            setFarsiFeedback('در حال دانلود بسته آفلاین tiny-ava v2...');
+                            const ok = await farsiOfflineTts.downloadTinyAvaModel();
+                            if (ok) {
+                              setFarsiFeedback('✓ بسته tiny-ava v2 با موفقیت دانلود و در IndexedDB ذخیره شد.');
+                            } else {
+                              setFarsiFeedback('⚠️ خطا در دانلود tiny-ava v2. فال‌بک به eSpeak فعال است.');
+                            }
+                          }}
+                          disabled={tinyAvaCache.status === 'downloading'}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs font-bold transition-colors cursor-pointer disabled:opacity-50"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          <span>
+                            {tinyAvaCache.status === 'downloading'
+                              ? `دانلود (${tinyAvaCache.downloadProgress}%)`
+                              : 'دانلود tiny-ava (~46MB)'}
+                          </span>
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            await farsiOfflineTts.clearTinyAvaCache();
+                            setFarsiFeedback('کش tiny-ava پاک شد.');
+                          }}
+                          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-700 text-slate-400 hover:text-red-400 text-xs transition-colors cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>پاک کردن کش tiny-ava</span>
+                        </button>
+                      )
+                    ) : !piperCache.isOfflineReady ? (
                       <button
                         type="button"
                         onClick={async () => {
@@ -834,9 +952,17 @@ export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
                       onClick={async () => {
                         setIsFarsiTesting(true);
                         try {
-                          await farsiOfflineTts.preview(activeEngine, ttsSpeed, ttsPitch, 1.0, (reason) => {
-                            setFarsiFeedback(reason);
-                          });
+                          await farsiOfflineTts.preview(
+                            activeEngine,
+                            ttsSpeed,
+                            ttsPitch,
+                            1.0,
+                            (reason) => {
+                              setFarsiFeedback(reason);
+                            },
+                            undefined,
+                            activeEngine === 'tiny-ava' ? tinyAvaVoice : undefined
+                          );
                         } catch (err: any) {
                           setFarsiFeedback(err?.message || 'خطا در پخش');
                         } finally {
@@ -851,6 +977,12 @@ export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
                     </button>
                   </div>
                 </div>
+
+                {activeEngine === 'tiny-ava' && (
+                  <p className="text-[10px] text-slate-500">
+                    Powered by tiny-ava (Mehdi Allahyari / OncillaAI) · Model weights CC BY 4.0
+                  </p>
+                )}
 
                 {farsiFeedback && (
                   <div className="p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-300 text-xs flex items-center gap-2">

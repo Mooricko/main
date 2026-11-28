@@ -63,6 +63,18 @@ export default defineConfig(() => {
               res.setHeader('Content-Type', 'text/plain');
               return res.end('WASM file not found');
             }
+            if (req.url && /^\/?wasm\/ort-wasm-.*\.mjs(\?.*)?$/.test(req.url)) {
+              const cleanPath = req.url.split('?')[0].replace(/^\//, '');
+              const mjsFileName = path.basename(cleanPath);
+              const publicMjs = path.resolve(__dirname, 'public', cleanPath);
+              const ortMjs = path.resolve(__dirname, 'node_modules/onnxruntime-web/dist', mjsFileName);
+              const target = fs.existsSync(publicMjs) ? publicMjs : ortMjs;
+              if (fs.existsSync(target) && fs.statSync(target).isFile()) {
+                res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+                res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+                return fs.createReadStream(target).pipe(res);
+              }
+            }
             next();
           });
         },
@@ -126,7 +138,7 @@ export default defineConfig(() => {
         'pdfjs-dist',
         'pdfjs-dist/legacy/build/pdf.mjs',
       ],
-      exclude: ['onnxruntime-web', 'espeak-ng'],
+      exclude: ['onnxruntime-web', 'onnxruntime-web/wasm', 'espeak-ng'],
     },
     build: {
       outDir: 'dist',

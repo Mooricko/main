@@ -19,19 +19,32 @@
 
   const audioEl = document.getElementById('tts-audio-player');
   let currentAudioUrl = null;
+  let webAudioCtx = null;
+  let activeWebAudioSource = null;
+  let activeWebAudioGain = null;
   let isCurrentlySpeaking = false;
   let currentLifecycleState = 'IDLE';
   let currentPlaybackId = 0;
   let activeEngineType = 'espeak';
 
-  // Load saved engine preference from storage
+  function isValidEngine(engine) {
+    if (typeof window.isFarsiTtsEngine === 'function') {
+      return window.isFarsiTtsEngine(engine);
+    }
+    return engine === 'piper' || engine === 'espeak' || engine === 'tiny-ava' || engine === 'custom';
+  }
+
+  // Load saved engine and voice preference from storage
   if (typeof chrome !== 'undefined' && chrome.storage?.local) {
-    chrome.storage.local.get(['farsiTtsEngine'], (res) => {
-      if (res?.farsiTtsEngine === 'piper' || res?.farsiTtsEngine === 'espeak') {
+    chrome.storage.local.get(['farsiTtsEngine', 'tinyAvaVoice'], (res) => {
+      if (isValidEngine(res?.farsiTtsEngine)) {
         activeEngineType = res.farsiTtsEngine;
         if (window.farsiOfflineTts) {
           window.farsiOfflineTts.setEngine(activeEngineType);
         }
+      }
+      if (res?.tinyAvaVoice && window.farsiOfflineTts && typeof window.farsiOfflineTts.setTinyAvaVoice === 'function') {
+        window.farsiOfflineTts.setTinyAvaVoice(res.tinyAvaVoice);
       }
     });
   }
@@ -79,6 +92,18 @@
       }
     }
 
+    if (activeWebAudioSource) {
+      activeWebAudioSource.onended = null;
+      try { activeWebAudioSource.stop(); } catch {}
+      try { activeWebAudioSource.disconnect(); } catch {}
+      try { activeWebAudioSource.buffer = null; } catch {}
+      activeWebAudioSource = null;
+    }
+    if (activeWebAudioGain) {
+      try { activeWebAudioGain.disconnect(); } catch {}
+      activeWebAudioGain = null;
+    }
+
     if (audioEl) {
       audioEl.onended = null;
       audioEl.onerror = null;
@@ -96,6 +121,64 @@
       } catch {}
       currentAudioUrl = null;
     }
+  }
+
+  /**
+   * Plays a single 24 kHz mono Float32Array PCM utterance through Web Audio API
+   * in the offscreen document with clean cancellation & reference release.
+   */
+  async function playFloat32SentenceWebAudio(samples, sampleRate, volume, playbackId) {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) {
+      throw new Error('Web Audio API unavailable in offscreen document');
+    }
+    if (!webAudioCtx || webAudioCtx.state === 'closed') {
+      webAudioCtx = new AudioCtx({ sampleRate: sampleRate || 24000 });
+    }
+    if (webAudioCtx.state === 'suspended') {
+      await webAudioCtx.resume();
+    }
+    if (currentPlaybackId !== playbackId) {
+      return;
+    }
+
+    const buffer = webAudioCtx.createBuffer(1, samples.length, sampleRate || 24000);
+    if (typeof buffer.copyToChannel === 'function') {
+      buffer.copyToChannel(samples, 0);
+    } else {
+      buffer.getChannelData(0).set(samples);
+    }
+
+    await new Promise((resolve) => {
+      if (currentPlaybackId !== playbackId) {
+        resolve();
+        return;
+      }
+
+      const source = webAudioCtx.createBufferSource();
+      source.buffer = buffer;
+
+      const gain = webAudioCtx.createGain();
+      gain.gain.value = Math.max(0, Math.min(1, volume));
+
+      source.connect(gain);
+      gain.connect(webAudioCtx.destination);
+
+      activeWebAudioSource = source;
+      activeWebAudioGain = gain;
+
+      source.onended = () => {
+        source.onended = null;
+        try { source.disconnect(); } catch {}
+        try { source.buffer = null; } catch {}
+        try { gain.disconnect(); } catch {}
+        if (activeWebAudioSource === source) activeWebAudioSource = null;
+        if (activeWebAudioGain === gain) activeWebAudioGain = null;
+        resolve();
+      };
+
+      source.start(0);
+    });
   }
 
   /**
@@ -129,6 +212,7 @@
         }
         const text = message.text || '';
         const engine = message.engine || activeEngineType;
+        const voice = message.voice;
         const speed = message.speed ?? 1.0;
         const pitch = message.pitch ?? 1.0;
         const volume = message.volume ?? 1.0;
@@ -153,7 +237,131 @@
           return false;
         }
 
-        manager.synthesize(text, { engine, speed, pitch, volume, allowFallback, playbackId })
+        // Fast utterance-level streaming path for tiny-ava via 24 kHz Web Audio API
+        const tinyAva = window.tinyAvaEngine;
+        const canStreamTinyAva =
+          engine === 'tiny-ava' &&
+          tinyAva &&
+          typeof tinyAva.synthesizeUtterances === 'function' &&
+          Boolean(window.AudioContext || window.webkitAudioContext);
+
+        if (canStreamTinyAva) {
+          (async () => {
+            let responded = false;
+            let totalDurationMs = 0;
+            let streamedAny = false;
+            try {
+              for await (const chunk of tinyAva.synthesizeUtterances(text, {
+                voice,
+                speed,
+                pitch,
+                volume,
+                playbackId,
+              })) {
+                if (currentPlaybackId !== playbackId) {
+                  return;
+                }
+                streamedAny = true;
+                totalDurationMs += chunk.durationMs;
+
+                if (!responded) {
+                  responded = true;
+                  currentLifecycleState = 'PLAYING';
+                  isCurrentlySpeaking = true;
+                  broadcastStatus('PLAYING', playbackId, undefined, chunk.durationMs, 'tiny-ava');
+                  sendResponse({
+                    success: true,
+                    playbackStarted: true,
+                    engineUsed: 'tiny-ava',
+                    durationMs: chunk.durationMs,
+                    playbackId,
+                    fallbackTriggered: false,
+                  });
+                }
+
+                await playFloat32SentenceWebAudio(chunk.pcm, chunk.sampleRate || 24000, volume, playbackId);
+
+                if (currentPlaybackId !== playbackId) {
+                  return;
+                }
+              }
+
+              if (currentPlaybackId !== playbackId) {
+                return;
+              }
+
+              if (streamedAny) {
+                currentLifecycleState = 'IDLE';
+                isCurrentlySpeaking = false;
+                broadcastStatus('ENDED', playbackId, undefined, totalDurationMs, 'tiny-ava');
+                return;
+              }
+
+              // tiny-ava produced no audio (e.g. failed init/download) -> fall through to manager fallback
+              throw new Error('tiny-ava unavailable');
+            } catch (streamErr) {
+              if (currentPlaybackId !== playbackId) return;
+              if (responded) {
+                currentLifecycleState = 'ERROR';
+                isCurrentlySpeaking = false;
+                broadcastStatus('ERROR', playbackId, streamErr?.message || 'tiny-ava playback error', totalDurationMs, 'tiny-ava');
+                return;
+              }
+              // Fall back cleanly to manager.synthesize (which handles eSpeak fallback if allowFallback=true)
+              if (!allowFallback) {
+                currentLifecycleState = 'ERROR';
+                isCurrentlySpeaking = false;
+                const errMsg = streamErr?.message || 'tiny-ava synthesis failed';
+                broadcastStatus('ERROR', playbackId, errMsg, 0, 'tiny-ava');
+                sendResponse({ success: false, playbackStarted: false, engineUsed: 'tiny-ava', error: errMsg, playbackId });
+                return;
+              }
+              manager.synthesize(text, { engine: 'espeak', speed, pitch, volume, allowFallback: false, playbackId })
+                .then(async (res) => {
+                  if (currentPlaybackId !== playbackId) return;
+                  if (!res.success || !res.wavBlob || !audioEl) {
+                    const errMsg = res.error || 'Fallback synthesis failed';
+                    broadcastStatus('ERROR', playbackId, errMsg, 0, 'espeak');
+                    sendResponse({ success: false, playbackStarted: false, engineUsed: 'espeak', error: errMsg, playbackId });
+                    return;
+                  }
+                  currentAudioUrl = URL.createObjectURL(res.wavBlob);
+                  audioEl.src = currentAudioUrl;
+                  audioEl.volume = Math.max(0, Math.min(1, volume));
+                  audioEl.onplay = () => {
+                    if (currentPlaybackId === playbackId) {
+                      broadcastStatus('PLAYING', playbackId, undefined, res.durationMs, 'espeak');
+                    }
+                  };
+                  audioEl.onended = () => {
+                    if (currentPlaybackId === playbackId) {
+                      broadcastStatus('ENDED', playbackId, undefined, res.durationMs, 'espeak');
+                      stopLocalAudioResources();
+                    }
+                  };
+                  await audioEl.play();
+                  sendResponse({
+                    success: true,
+                    playbackStarted: true,
+                    engineUsed: 'espeak',
+                    durationMs: res.durationMs,
+                    playbackId,
+                    fallbackTriggered: true,
+                    fallbackReason: streamErr?.message || 'tiny-ava fallback to eSpeak NG',
+                  });
+                })
+                .catch((fbErr) => {
+                  if (currentPlaybackId === playbackId) {
+                    broadcastStatus('ERROR', playbackId, fbErr?.message || 'Fallback failed', 0, 'espeak');
+                  }
+                  sendResponse({ success: false, playbackStarted: false, error: fbErr?.message || 'Fallback failed', playbackId });
+                });
+            }
+          })();
+          return true;
+        }
+
+        manager.synthesize(text, { engine, voice, speed, pitch, volume, allowFallback, playbackId })
           .then(async (res) => {
             // Guard against stale playback if a stop or newer utterance occurred while synthesizing
             if (currentPlaybackId !== playbackId) {
@@ -294,7 +502,7 @@
       }
 
       case 'SET_ENGINE': {
-        if (message.engine === 'piper' || message.engine === 'espeak' || message.engine === 'custom') {
+        if (isValidEngine(message.engine)) {
           activeEngineType = message.engine;
           const manager = getManager();
           if (manager) {
@@ -328,6 +536,30 @@
         manager.downloadPiperModel()
           .then((ok) => sendResponse({ success: ok, error: ok ? undefined : 'Piper model download failed' }))
           .catch((err) => sendResponse({ success: false, error: err?.message || 'Piper model download failed' }));
+        return true; // async
+      }
+
+      case 'PRECACHE_TINY_AVA': {
+        const manager = getManager();
+        if (!manager || typeof manager.downloadTinyAvaModel !== 'function') {
+          sendResponse({ success: false, error: 'TTS manager not ready' });
+          return false;
+        }
+        manager.downloadTinyAvaModel()
+          .then((ok) => sendResponse({ success: ok, error: ok ? undefined : 'tiny-ava model download failed' }))
+          .catch((err) => sendResponse({ success: false, error: err?.message || 'tiny-ava model download failed' }));
+        return true; // async
+      }
+
+      case 'CLEAR_TINY_AVA_CACHE': {
+        const manager = getManager();
+        if (!manager || typeof manager.clearTinyAvaCache !== 'function') {
+          sendResponse({ success: false, error: 'TTS manager not ready' });
+          return false;
+        }
+        manager.clearTinyAvaCache()
+          .then(() => sendResponse({ success: true }))
+          .catch((err) => sendResponse({ success: false, error: err?.message || 'Failed to clear tiny-ava cache' }));
         return true; // async
       }
 

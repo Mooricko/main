@@ -3,9 +3,22 @@
  * (Piper ONNX & eSpeak NG WASM)
  */
 
-export type FarsiTtsEngineType = 'espeak' | 'piper' | 'custom';
+export type FarsiTtsEngineType = 'espeak' | 'piper' | 'tiny-ava' | 'custom';
 
-export const FARSI_TTS_ENGINES: readonly FarsiTtsEngineType[] = ['espeak', 'piper', 'custom'];
+export const FARSI_TTS_ENGINES: readonly FarsiTtsEngineType[] = [
+  'espeak',
+  'piper',
+  'tiny-ava',
+  'custom',
+];
+
+export type TinyAvaVoiceId = 'parisa' | 'mana' | 'maya';
+
+export const TINY_AVA_VOICES: readonly TinyAvaVoiceId[] = ['parisa', 'mana', 'maya'];
+
+export function isTinyAvaVoice(value: unknown): value is TinyAvaVoiceId {
+  return typeof value === 'string' && (TINY_AVA_VOICES as readonly string[]).includes(value);
+}
 
 export function isFarsiTtsEngine(value: unknown): value is FarsiTtsEngineType {
   return typeof value === 'string' && (FARSI_TTS_ENGINES as readonly string[]).includes(value);
@@ -52,6 +65,7 @@ export type PiperErrorCategory =
 
 export interface FarsiTtsOptions {
   engine?: FarsiTtsEngineType;
+  voice?: TinyAvaVoiceId; // tiny-ava voice: 'parisa' (default), 'mana', or 'maya'
   speed?: number; // 0.5 to 2.0 (default 1.0)
   pitch?: number; // 0.6 to 1.4 (default 1.0)
   volume?: number; // 0.0 to 1.0 (default 1.0)
@@ -61,6 +75,15 @@ export interface FarsiTtsOptions {
   onEnd?: () => void;
   onError?: (err: Error) => void;
   onFallback?: (reason: string) => void;
+  onDownloadProgress?: (progress: {
+    file: string;
+    fileLoadedBytes: number;
+    fileTotalBytes: number;
+    totalLoadedBytes: number;
+    totalExpectedBytes: number;
+    percent: number;
+    cached: boolean;
+  }) => void;
 }
 
 export type PiperModelStatus = 'not_cached' | 'downloading' | 'ready' | 'error';
@@ -70,6 +93,19 @@ export interface PiperCacheInfo {
   modelName: string;
   sizeBytes: number;
   downloadProgress: number; // 0 to 100
+  lastUpdated?: number;
+  errorMessage?: string;
+  errorCategory?: PiperErrorCategory;
+  cacheVersion?: string;
+  isOfflineReady: boolean;
+}
+
+export interface TinyAvaCacheInfo {
+  status: PiperModelStatus;
+  modelName: string;
+  sizeBytes: number;
+  downloadProgress: number; // 0 to 100
+  statusDetail?: string;
   lastUpdated?: number;
   errorMessage?: string;
   errorCategory?: PiperErrorCategory;
@@ -113,6 +149,7 @@ export interface TtsEngine {
   synthesize(text: string, options?: FarsiTtsOptions): Promise<SynthesisResult>;
   speak(text: string, options?: FarsiTtsOptions): Promise<void>;
   stop(): void;
+  abort?(): void;
   dispose(): void;
   isSpeaking(): boolean;
 }
@@ -137,8 +174,11 @@ export type TtsActionType =
   | 'GET_STATUS'
   | 'SET_ENGINE'
   | 'STATUS_CHANGED'
+  | 'DOWNLOAD_PROGRESS'
   | 'DOWNLOAD_PIPER'
   | 'CLEAR_PIPER_CACHE'
+  | 'PRECACHE_TINY_AVA'
+  | 'CLEAR_TINY_AVA_CACHE'
   | 'CUSTOM_CONFIG_CHANGED';
 
 export interface TtsMessageBase {
@@ -152,6 +192,7 @@ export interface TtsSpeakMessage extends TtsMessageBase {
   action?: 'SPEAK';
   text: string;
   engine?: FarsiTtsEngineType;
+  voice?: TinyAvaVoiceId;
   speed?: number;
   pitch?: number;
   volume?: number;
@@ -197,6 +238,7 @@ export interface OffscreenTtsMessage extends TtsMessageBase {
   action?: TtsActionType | string;
   text?: string;
   engine?: FarsiTtsEngineType;
+  voice?: TinyAvaVoiceId;
   speed?: number;
   pitch?: number;
   volume?: number;
@@ -217,5 +259,6 @@ export interface OffscreenTtsResponse {
     activeEngine: FarsiTtsEngineType;
     offscreenReady: boolean;
     piperCache?: PiperCacheInfo;
+    tinyAvaCache?: TinyAvaCacheInfo;
   };
 }

@@ -12,16 +12,30 @@
  * - Full standalone in-browser support with IndexedDB caching
  */
 
-import { FarsiTtsEngineType, FarsiTtsOptions, SynthesisResult, PiperCacheInfo, isFarsiTtsEngine, CustomTtsConfig, TtsLifecycleState } from './types';
+import {
+  FarsiTtsEngineType,
+  FarsiTtsOptions,
+  SynthesisResult,
+  PiperCacheInfo,
+  TinyAvaCacheInfo,
+  TinyAvaVoiceId,
+  isFarsiTtsEngine,
+  isTinyAvaVoice,
+  CustomTtsConfig,
+  TtsLifecycleState,
+} from './types';
 import { espeakEngine } from './espeakEngine';
 import { piperEngine } from './piperEngine';
+import { tinyAvaEngine } from './tinyAvaEngine';
 import { customTtsEngine } from './customTtsEngine';
 import { indexedDbModelStore } from './indexedDbModelStore';
+import { tinyAvaModelStore } from './tinyAvaModelStore';
 import { safeStorage } from '../../utils/safeStorage';
 import { loadCustomTtsConfig } from './customTtsConfig';
 import { isRtlText } from '../../utils/textParser';
 
 const STORAGE_KEY_ENGINE = 'adhd_reader_farsi_tts_engine';
+const STORAGE_KEY_TINY_AVA_VOICE = 'adhd_reader_tiny_ava_voice';
 const STORAGE_KEY_SPEED = 'adhd_reader_farsi_tts_speed';
 const STORAGE_KEY_PITCH = 'adhd_reader_farsi_tts_pitch';
 
@@ -29,6 +43,7 @@ export const SAMPLE_FARSI_TEXT = 'این یک آزمایش برای سیستم �
 
 class FarsiOfflineTtsManager {
   private activeEngine: FarsiTtsEngineType = 'espeak';
+  private tinyAvaVoice: TinyAvaVoiceId = 'parisa';
   private currentPlayingId: number = 0;
   private isSpeakingActive: boolean = false;
   private lifecycleState: TtsLifecycleState = 'IDLE';
@@ -63,6 +78,10 @@ class FarsiOfflineTtsManager {
     if (typeof (piperEngine as any).resetForTesting === 'function') {
       (piperEngine as any).resetForTesting();
     }
+    if (typeof (tinyAvaEngine as any).resetForTesting === 'function') {
+      (tinyAvaEngine as any).resetForTesting();
+    }
+    this.tinyAvaVoice = 'parisa';
   }
 
   public handleStopMessage(): void {
@@ -76,6 +95,22 @@ class FarsiOfflineTtsManager {
           const action = message.action || message.type;
           if (action === 'STATUS_CHANGED') {
             this.handleExtensionStatusChanged(message);
+          } else if (action === 'DOWNLOAD_PROGRESS' && message.engine === 'tiny-ava') {
+            tinyAvaModelStore.reportExternalDownloadProgress({
+              file: message.file || 'tiny-ava',
+              totalLoadedBytes: message.totalLoadedBytes || 0,
+              percent: message.percent || 0,
+              cached: Boolean(message.cached),
+            });
+            this.activeCallbacks?.onDownloadProgress?.({
+              file: message.file || 'tiny-ava',
+              fileLoadedBytes: message.fileLoadedBytes || 0,
+              fileTotalBytes: message.fileTotalBytes || 0,
+              totalLoadedBytes: message.totalLoadedBytes || 0,
+              totalExpectedBytes: message.totalExpectedBytes || 0,
+              percent: message.percent || 0,
+              cached: Boolean(message.cached),
+            });
           }
         });
       } catch {}
@@ -136,13 +171,26 @@ class FarsiOfflineTtsManager {
         this.activeEngine = savedEngine;
       }
 
+      const savedVoice = safeStorage.getItem(STORAGE_KEY_TINY_AVA_VOICE);
+      if (savedVoice && isTinyAvaVoice(savedVoice)) {
+        this.tinyAvaVoice = savedVoice;
+        tinyAvaEngine.setDefaultVoice(savedVoice);
+      }
+
       // Check if Chrome Extension storage has a preference
       if (typeof chrome !== 'undefined' && chrome.storage?.local) {
-        chrome.storage.local.get(['farsiTtsEngine'], (res) => {
+        chrome.storage.local.get(['farsiTtsEngine', 'tinyAvaVoice'], (res) => {
+          let changed = false;
           if (res?.farsiTtsEngine && isFarsiTtsEngine(res.farsiTtsEngine)) {
             this.activeEngine = res.farsiTtsEngine;
-            this.notify();
+            changed = true;
           }
+          if (res?.tinyAvaVoice && isTinyAvaVoice(res.tinyAvaVoice)) {
+            this.tinyAvaVoice = res.tinyAvaVoice;
+            tinyAvaEngine.setDefaultVoice(res.tinyAvaVoice);
+            changed = true;
+          }
+          if (changed) this.notify();
         });
       }
     } catch {
@@ -161,6 +209,22 @@ class FarsiOfflineTtsManager {
 
   public getActiveEngine(): FarsiTtsEngineType {
     return this.activeEngine;
+  }
+
+  public getTinyAvaVoice(): TinyAvaVoiceId {
+    return this.tinyAvaVoice;
+  }
+
+  public setTinyAvaVoice(voice: TinyAvaVoiceId): void {
+    if (!isTinyAvaVoice(voice)) return;
+    this.tinyAvaVoice = voice;
+    tinyAvaEngine.setDefaultVoice(voice);
+    safeStorage.setItem(STORAGE_KEY_TINY_AVA_VOICE, voice);
+
+    if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+      chrome.storage.local.set({ tinyAvaVoice: voice }).catch(() => {});
+    }
+    this.notify();
   }
 
   public setEngine(engine: FarsiTtsEngineType): void {
@@ -265,6 +329,40 @@ class FarsiOfflineTtsManager {
         fallbackTriggered: true,
         fallbackReason: reason,
       };
+    } else if (engineType === 'tiny-ava') {
+      const tinyAvaOptions: FarsiTtsOptions = {
+        ...options,
+        voice: options.voice || this.tinyAvaVoice,
+      };
+      const tinyAvaResult = await tinyAvaEngine.synthesize(text, tinyAvaOptions);
+      if (tinyAvaResult.success) {
+        return tinyAvaResult;
+      }
+
+      if (options.allowFallback === false) {
+        return tinyAvaResult;
+      }
+
+      const reason = tinyAvaResult.error || 'tiny-ava neural model not ready in IndexedDB';
+      console.warn(`[FarsiOfflineTtsManager] tiny-ava failed (${reason}). Explicitly falling back to eSpeak NG WASM.`);
+      options.onFallback?.(reason);
+
+      const fallbackResult = await espeakEngine.synthesize(text, options);
+      if (!fallbackResult.success) {
+        return {
+          ...fallbackResult,
+          engineUsed: 'espeak',
+          fallbackTriggered: true,
+          fallbackReason: reason,
+          error: `Both tiny-ava and eSpeak fallback failed: (tiny-ava: ${reason}) (eSpeak: ${fallbackResult.error || 'unknown'})`,
+        };
+      }
+      return {
+        ...fallbackResult,
+        engineUsed: 'espeak',
+        fallbackTriggered: true,
+        fallbackReason: reason,
+      };
     } else if (engineType === 'custom') {
       // User's own endpoint. Fall back to eSpeak only if text is Farsi and fallback is permitted.
       const customResult = await customTtsEngine.synthesize(text, options);
@@ -323,6 +421,7 @@ class FarsiOfflineTtsManager {
           type: 'SPEAK',
           text,
           engine: engineType,
+          voice: options.voice || this.tinyAvaVoice,
           speed: options.speed ?? 1.0,
           pitch: options.pitch ?? 1.0,
           volume: options.volume ?? 1.0,
@@ -409,9 +508,11 @@ class FarsiOfflineTtsManager {
       const activeEngineInstance =
         synthResult.engineUsed === 'piper'
           ? piperEngine
-          : synthResult.engineUsed === 'custom'
-            ? customTtsEngine
-            : espeakEngine;
+          : synthResult.engineUsed === 'tiny-ava'
+            ? tinyAvaEngine
+            : synthResult.engineUsed === 'custom'
+              ? customTtsEngine
+              : espeakEngine;
       await activeEngineInstance.playWavBlob(synthResult.wavBlob, wrappedOptions);
     } catch (err: any) {
       if (this.currentPlayingId === playbackId) {
@@ -433,6 +534,7 @@ class FarsiOfflineTtsManager {
     // Stop local engines
     espeakEngine.stop();
     piperEngine.stop();
+    tinyAvaEngine.stop();
     customTtsEngine.stop();
 
     this.notify();
@@ -476,7 +578,13 @@ class FarsiOfflineTtsManager {
   }
 
   public isSpeaking(): boolean {
-    return this.isSpeakingActive || espeakEngine.isSpeaking() || piperEngine.isSpeaking() || customTtsEngine.isSpeaking();
+    return (
+      this.isSpeakingActive ||
+      espeakEngine.isSpeaking() ||
+      piperEngine.isSpeaking() ||
+      tinyAvaEngine.isSpeaking() ||
+      customTtsEngine.isSpeaking()
+    );
   }
 
   /**
@@ -505,6 +613,32 @@ class FarsiOfflineTtsManager {
   }
 
   /**
+   * IndexedDB Model Management for tiny-ava v2 (Parisa / Mana / Maya)
+   */
+  public async getTinyAvaCacheInfo(): Promise<TinyAvaCacheInfo> {
+    return tinyAvaModelStore.checkCache();
+  }
+
+  public subscribeTinyAvaCache(cb: (info: TinyAvaCacheInfo) => void): () => void {
+    return tinyAvaModelStore.subscribe(cb);
+  }
+
+  public async downloadTinyAvaModel(onProgress?: (pct: number) => void): Promise<boolean> {
+    const success = await tinyAvaModelStore.downloadAndCacheModel(onProgress);
+    if (success) {
+      await tinyAvaEngine.init();
+      this.notify();
+    }
+    return success;
+  }
+
+  public async clearTinyAvaCache(): Promise<void> {
+    tinyAvaEngine.dispose();
+    await tinyAvaModelStore.clearCache();
+    this.notify();
+  }
+
+  /**
    * Quick preview test
    */
   public async preview(
@@ -513,11 +647,20 @@ class FarsiOfflineTtsManager {
     pitch: number = 1.0,
     volume: number = 1.0,
     onFallback?: (msg: string) => void,
-    sampleText?: string
+    sampleText?: string,
+    voice?: TinyAvaVoiceId
   ): Promise<void> {
-    const textToSpeak = sampleText || (engine === 'custom' ? 'Custom TTS endpoint active. Ready to focus and read.' : SAMPLE_FARSI_TEXT);
+    const effectiveVoice = voice || this.tinyAvaVoice;
+    const defaultText =
+      engine === 'custom'
+        ? 'Custom TTS endpoint active. Ready to focus and read.'
+        : engine === 'tiny-ava' && effectiveVoice === 'maya'
+          ? 'Hello, this is Maya from tiny-ava speaking completely offline.'
+          : SAMPLE_FARSI_TEXT;
+    const textToSpeak = sampleText || defaultText;
     return this.speak(textToSpeak, {
       engine,
+      voice: effectiveVoice,
       speed,
       pitch,
       volume,

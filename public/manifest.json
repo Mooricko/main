@@ -12,7 +12,9 @@
     "offscreen"
   ],
   "host_permissions": [
-    "<all_urls>"
+    "<all_urls>",
+    "https://huggingface.co/*",
+    "https://*.hf.co/*"
   ],
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:;"
@@ -21,6 +23,7 @@
     {
       "resources": [
         "icons/*",
+        "wasm/*",
         "content.css",
         "offscreen.html",
         "offscreen.js",
@@ -31,6 +34,8 @@
         "espeak-ng.wasm",
         "espeak-data/*",
         "fa_IR-amir-medium.onnx.json",
+        "tiny-ava-parisa.json",
+        "tiny-ava-v2.json",
         "pdf.worker.min.mjs",
         "assets/*"
       ],

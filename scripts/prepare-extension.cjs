@@ -22,6 +22,9 @@ async function prepareExtension() {
   // Create target directories
   fs.mkdirSync(path.join(extDir, 'assets'), { recursive: true });
   fs.mkdirSync(path.join(extDir, 'icons'), { recursive: true });
+  fs.mkdirSync(path.join(extDir, 'wasm'), { recursive: true });
+  fs.mkdirSync(path.join(distDir, 'wasm'), { recursive: true });
+  fs.mkdirSync(path.join(publicDir, 'wasm'), { recursive: true });
 
   // 1. Copy assets
   const appJsSrc = path.join(distDir, 'assets', 'app.js');
@@ -71,6 +74,33 @@ async function prepareExtension() {
     console.warn('⚠️ Warning: pdf.worker.min.mjs not found in node_modules/pdfjs-dist/legacy/build');
   }
 
+  // 2.6 Sync version-matched ONNX Runtime Web JS + WASM/MJS binaries into wasm/
+  const ortDistDir = path.join(rootDir, 'node_modules', 'onnxruntime-web', 'dist');
+  const ortWasmJsSrc = path.join(ortDistDir, 'ort.wasm.min.js');
+  if (fs.existsSync(ortWasmJsSrc)) {
+    fs.copyFileSync(ortWasmJsSrc, path.join(publicDir, 'ort.min.js'));
+    console.log('✓ Synced ort.min.js from onnxruntime-web/dist/ort.wasm.min.js');
+  }
+
+  const ortWasmBinaries = [
+    'ort-wasm-simd-threaded.wasm',
+    'ort-wasm-simd-threaded.mjs',
+  ];
+
+  for (const binFile of ortWasmBinaries) {
+    const src = path.join(ortDistDir, binFile);
+    if (fs.existsSync(src)) {
+      fs.copyFileSync(src, path.join(publicDir, 'wasm', binFile));
+      fs.copyFileSync(src, path.join(extDir, 'wasm', binFile));
+      fs.copyFileSync(src, path.join(distDir, 'wasm', binFile));
+      // Keep root copies synced for backward compatibility with legacy paths
+      fs.copyFileSync(src, path.join(publicDir, binFile));
+      console.log('✓ Synced wasm/' + binFile + ' from onnxruntime-web/dist');
+    } else {
+      console.warn('⚠️ Warning: ' + binFile + ' not found in node_modules/onnxruntime-web/dist');
+    }
+  }
+
   // 3. Copy manifest, background, content, icons, offscreen document & runtime assets
   const filesToCopy = [
     'manifest.json',
@@ -85,6 +115,8 @@ async function prepareExtension() {
     'tts-engine.bundle.js',
     'espeak-ng.wasm',
     'fa_IR-amir-medium.onnx.json',
+    'tiny-ava-parisa.json',
+    'tiny-ava-v2.json',
     'pdf.worker.min.mjs'
   ];
 
@@ -155,17 +187,25 @@ How to read highlighted text from any webpage:
   if (fs.existsSync(path.join(extDir, 'ort.min.js'))) {
     zip.file('ort.min.js', fs.readFileSync(path.join(extDir, 'ort.min.js'), 'utf8'));
   }
-  if (fs.existsSync(path.join(extDir, 'ort-wasm-simd-threaded.wasm'))) {
-    zip.file('ort-wasm-simd-threaded.wasm', fs.readFileSync(path.join(extDir, 'ort-wasm-simd-threaded.wasm')));
-  }
-  if (fs.existsSync(path.join(extDir, 'ort-wasm-simd-threaded.mjs'))) {
-    zip.file('ort-wasm-simd-threaded.mjs', fs.readFileSync(path.join(extDir, 'ort-wasm-simd-threaded.mjs'), 'utf8'));
+
+  const wasmFolder = zip.folder('wasm');
+  for (const binFile of ortWasmBinaries) {
+    const binPath = path.join(extDir, 'wasm', binFile);
+    if (fs.existsSync(binPath)) {
+      wasmFolder.file(binFile, fs.readFileSync(binPath));
+    }
   }
   if (fs.existsSync(path.join(extDir, 'espeak-ng.wasm'))) {
     zip.file('espeak-ng.wasm', fs.readFileSync(path.join(extDir, 'espeak-ng.wasm')));
   }
   if (fs.existsSync(path.join(extDir, 'fa_IR-amir-medium.onnx.json'))) {
     zip.file('fa_IR-amir-medium.onnx.json', fs.readFileSync(path.join(extDir, 'fa_IR-amir-medium.onnx.json'), 'utf8'));
+  }
+  if (fs.existsSync(path.join(extDir, 'tiny-ava-parisa.json'))) {
+    zip.file('tiny-ava-parisa.json', fs.readFileSync(path.join(extDir, 'tiny-ava-parisa.json'), 'utf8'));
+  }
+  if (fs.existsSync(path.join(extDir, 'tiny-ava-v2.json'))) {
+    zip.file('tiny-ava-v2.json', fs.readFileSync(path.join(extDir, 'tiny-ava-v2.json'), 'utf8'));
   }
   if (fs.existsSync(path.join(extDir, 'pdf.worker.min.mjs'))) {
     zip.file('pdf.worker.min.mjs', fs.readFileSync(path.join(extDir, 'pdf.worker.min.mjs'), 'utf8'));

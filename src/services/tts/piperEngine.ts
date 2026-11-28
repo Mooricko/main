@@ -13,45 +13,9 @@ import { farsiTextToPiperTokens, normalizeFarsiText } from './farsiPhonemizer';
 import { extractPiperAudioSamples, encodePcmWav, playAudioBlob, AudioPlaybackHandle } from './audioUtils';
 import { splitIntoSentences } from './phonemizer/persianNormalizer';
 import { validatePiperModelConfig } from './modelValidation';
+import { getOrt } from './ortLoader';
 
-// Lazy loader for onnxruntime-web to avoid premature WASM instantiation on app load
-let cachedOrtModule: any = null;
-let ortLoadPromise: Promise<any> | null = null;
-
-export async function getOrt(): Promise<any> {
-  // Check globalThis.ort first (e.g. Chrome Extension offscreen or pre-loaded script)
-  if (typeof (globalThis as any).ort !== 'undefined' && (globalThis as any).ort?.InferenceSession) {
-    cachedOrtModule = (globalThis as any).ort;
-    return cachedOrtModule;
-  }
-
-  if (cachedOrtModule) return cachedOrtModule;
-  if (ortLoadPromise) return ortLoadPromise;
-
-  ortLoadPromise = (async () => {
-    try {
-      const ort = await import('onnxruntime-web');
-      if (ort?.env?.wasm) {
-        if (typeof chrome !== 'undefined' && chrome.runtime?.getURL) {
-          ort.env.wasm.wasmPaths = chrome.runtime.getURL('');
-        } else {
-          ort.env.wasm.wasmPaths = '/';
-        }
-        ort.env.wasm.numThreads = Math.min(2, Math.max(1, (typeof navigator !== 'undefined' ? navigator.hardwareConcurrency : 2) || 2) - 1);
-        ort.env.wasm.simd = true;
-      }
-      cachedOrtModule = ort;
-      return ort;
-    } catch (err) {
-      console.warn('Could not dynamically load onnxruntime-web, will use eSpeak fallback:', err);
-      return null;
-    } finally {
-      ortLoadPromise = null;
-    }
-  })();
-
-  return ortLoadPromise;
-}
+export { getOrt };
 
 export class PiperEngine implements TtsEngine {
   public readonly name = 'Piper Neural (ONNX Web)';

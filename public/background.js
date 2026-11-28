@@ -149,8 +149,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
-  // 3. Farsi Offline TTS Actions: SPEAK, STOP, SET_ENGINE, GET_STATUS (canonical), GET_TTS_STATUS, PRECACHE_PIPER
-  if (['SPEAK', 'STOP', 'SET_ENGINE', 'GET_STATUS', 'GET_TTS_STATUS', 'PRECACHE_PIPER'].includes(action)) {
+  // 3. Farsi Offline TTS Actions: SPEAK, STOP, SET_ENGINE, GET_STATUS (canonical), GET_TTS_STATUS, PRECACHE_PIPER, PRECACHE_TINY_AVA, CLEAR_TINY_AVA_CACHE
+  if (['SPEAK', 'STOP', 'SET_ENGINE', 'GET_STATUS', 'GET_TTS_STATUS', 'PRECACHE_PIPER', 'PRECACHE_TINY_AVA', 'CLEAR_TINY_AVA_CACHE'].includes(action)) {
     (async () => {
       try {
         await ensureOffscreenDocument();
