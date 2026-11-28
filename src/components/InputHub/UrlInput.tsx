@@ -4,20 +4,25 @@ import {
   ArrowRight, 
   Loader2, 
   X, 
-  CheckCircle2, 
   Clock, 
   FileText, 
   AlertCircle, 
   User,
-  Sparkles
+  Sparkles,
+  ShieldAlert
 } from 'lucide-react';
 import { isUrlString } from '../../services/import/detectInput';
-import { fetchUrlPreview } from '../../services/import/extractUrl';
+import {
+  fetchUrlPreview,
+  isThirdPartyProxyConsentError,
+  THIRD_PARTY_PROXIES,
+  type ThirdPartyProxyId,
+} from '../../services/import/extractUrl';
 import { HIGHLIGHT_COLORS } from '../../utils/themeStyles';
 import { HighlightColor, ReaderDocument, UrlPreviewData } from '../../types';
 
 interface UrlInputProps {
-  onImportUrl: (url: string, preloadedDoc?: ReaderDocument) => void;
+  onImportUrl: (url: string, preloadedDoc?: ReaderDocument, approvedProxy?: ThirdPartyProxyId) => void;
   isLoading: boolean;
   highlightColor: HighlightColor;
   disabled?: boolean;
@@ -26,7 +31,7 @@ interface UrlInputProps {
   onUrlChange?: (url: string) => void;
 }
 
-type PreviewStatus = 'idle' | 'loading' | 'success' | 'error';
+type PreviewStatus = 'idle' | 'loading' | 'success' | 'proxy-consent' | 'error';
 
 export const UrlInput: React.FC<UrlInputProps> = ({
   onImportUrl,
@@ -41,6 +46,7 @@ export const UrlInput: React.FC<UrlInputProps> = ({
   const [previewStatus, setPreviewStatus] = useState<PreviewStatus>('idle');
   const [previewData, setPreviewData] = useState<UrlPreviewData | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [activeProxyHost, setActiveProxyHost] = useState<string | null>(null);
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -55,7 +61,7 @@ export const UrlInput: React.FC<UrlInputProps> = ({
     }
   }, [externalUrl]);
 
-  // Trigger quick preview when a valid URL is detected
+  // Trigger quick preview when a valid URL is detected (direct first-party / own backend ONLY)
   useEffect(() => {
     const trimmed = url.trim();
 
@@ -63,6 +69,7 @@ export const UrlInput: React.FC<UrlInputProps> = ({
       setPreviewStatus('idle');
       setPreviewData(null);
       setPreviewError(null);
+      setActiveProxyHost(null);
       abortControllerRef.current?.abort();
       return;
     }
@@ -79,6 +86,7 @@ export const UrlInput: React.FC<UrlInputProps> = ({
 
     setPreviewStatus('loading');
     setPreviewError(null);
+    setActiveProxyHost(null);
 
     const debounceTimer = setTimeout(async () => {
       try {
@@ -90,8 +98,13 @@ export const UrlInput: React.FC<UrlInputProps> = ({
       } catch (err: any) {
         if (controller.signal.aborted) return;
         console.warn('URL preview error:', err);
-        setPreviewError(err?.message || "Couldn't generate quick preview.");
-        setPreviewStatus('error');
+        if (isThirdPartyProxyConsentError(err)) {
+          setPreviewError(err.reason);
+          setPreviewStatus('proxy-consent');
+        } else {
+          setPreviewError(err?.message || "Couldn't generate quick preview.");
+          setPreviewStatus('error');
+        }
       }
     }, 350);
 
@@ -100,6 +113,41 @@ export const UrlInput: React.FC<UrlInputProps> = ({
       controller.abort();
     };
   }, [url, wpm]);
+
+  const handleRetryWithApprovedProxy = async (proxyId: ThirdPartyProxyId) => {
+    const trimmed = url.trim();
+    if (!isUrlString(trimmed)) return;
+
+    const proxyMeta = THIRD_PARTY_PROXIES.find((p) => p.id === proxyId);
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    setPreviewStatus('loading');
+    setPreviewError(null);
+    setActiveProxyHost(proxyMeta?.host || proxyId);
+
+    try {
+      const preview = await fetchUrlPreview(trimmed, wpm, controller.signal, {
+        approvedProxy: proxyId,
+      });
+      if (!controller.signal.aborted) {
+        setPreviewData(preview);
+        setPreviewStatus('success');
+        setActiveProxyHost(null);
+      }
+    } catch (err: any) {
+      if (controller.signal.aborted) return;
+      setActiveProxyHost(null);
+      if (isThirdPartyProxyConsentError(err)) {
+        setPreviewError(err.reason);
+        setPreviewStatus('proxy-consent');
+      } else {
+        setPreviewError(err?.message || "Couldn't extract this page.");
+        setPreviewStatus('error');
+      }
+    }
+  };
 
   const handleUrlChange = (newVal: string) => {
     setUrl(newVal);
@@ -219,7 +267,11 @@ export const UrlInput: React.FC<UrlInputProps> = ({
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2 text-xs text-slate-300">
               <Loader2 className="w-3.5 h-3.5 text-blue-400 animate-spin" />
-              <span className="font-medium">Fetching article preview...</span>
+              <span className="font-medium">
+                {activeProxyHost
+                  ? `Fetching via ${activeProxyHost}...`
+                  : 'Fetching article preview...'}
+              </span>
             </div>
             {domainDisplay && (
               <span className="text-[10px] px-2 py-0.5 rounded-md bg-slate-800 text-slate-400 font-mono">
@@ -319,37 +371,75 @@ export const UrlInput: React.FC<UrlInputProps> = ({
         </div>
       )}
 
-      {/* 3. Error Fallback State */}
-      {isDetected && previewStatus === 'error' && !isLoading && (
-        <div 
-          id="url-preview-error"
-          className="p-3 rounded-xl bg-amber-950/30 border border-amber-800/40 text-xs text-amber-200 animate-in fade-in duration-150 space-y-2"
+      {/* 3. Explicit Third-Party Proxy Consent Prompt */}
+      {isDetected && previewStatus === 'proxy-consent' && !isLoading && (
+        <div
+          id="url-proxy-consent-card"
+          className="p-3.5 rounded-xl bg-amber-950/35 border border-amber-700/50 text-xs text-amber-100 animate-in fade-in duration-150 space-y-2.5"
         >
           <div className="flex items-start gap-2">
-            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
             <div className="flex-1 min-w-0">
-              <p className="font-medium text-amber-300">Live preview unavailable</p>
-              <p className="text-[11px] text-amber-200/80 mt-0.5">
-                This page may restrict remote previews. You can still attempt direct import or copy & paste text.
+              <p className="font-semibold text-amber-200">
+                Direct fetch failed — use a third-party proxy?
+              </p>
+              <p className="text-[11px] text-amber-200/85 mt-0.5 leading-relaxed">
+                {previewError ||
+                  "Khoroos Reader couldn't fetch this page directly from its server."}
+              </p>
+              <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
+                Sending a URL to an external proxy shares that link with that service. Only proceed for public pages—avoid private, unlisted, or logged-in links.
               </p>
             </div>
           </div>
 
-          <div className="flex items-center justify-end gap-2 pt-1">
+          <div className="flex flex-wrap items-center gap-1.5 pt-1 select-none">
+            {THIRD_PARTY_PROXIES.map((proxy) => (
+              <button
+                key={proxy.id}
+                id={`url-proxy-approve-${proxy.id}`}
+                type="button"
+                onClick={() => handleRetryWithApprovedProxy(proxy.id)}
+                title={proxy.description}
+                className="px-2.5 py-1.5 rounded-lg bg-amber-600/90 hover:bg-amber-500 text-white text-[11px] font-semibold transition-colors cursor-pointer"
+              >
+                Send to {proxy.host}
+              </button>
+            ))}
             <button
               type="button"
               onClick={handleClear}
-              className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-medium transition-colors"
+              className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-medium transition-colors cursor-pointer ml-auto"
             >
-              Clear
+              Cancel
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* 4. Non-Proxyable Error State (e.g. blocked local URL, unsupported binary, invalid URL) */}
+      {isDetected && previewStatus === 'error' && !isLoading && (
+        <div 
+          id="url-preview-error"
+          className="p-3 rounded-xl bg-red-950/35 border border-red-800/50 text-xs text-red-200 animate-in fade-in duration-150 space-y-2"
+        >
+          <div className="flex items-start gap-2">
+            <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <p className="font-medium text-red-300">Unable to load this URL</p>
+              <p className="text-[11px] text-red-200/85 mt-0.5">
+                {previewError || 'This URL cannot be imported automatically. You can copy and paste the text below instead.'}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-end gap-2 pt-1 select-none">
             <button
               type="button"
-              onClick={() => handleSubmit()}
-              className="px-3 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-semibold flex items-center gap-1 transition-colors"
+              onClick={handleClear}
+              className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-medium transition-colors cursor-pointer"
             >
-              <span>Attempt Full Import</span>
-              <ArrowRight className="w-3 h-3" />
+              Clear
             </button>
           </div>
         </div>

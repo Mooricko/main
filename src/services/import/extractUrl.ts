@@ -157,13 +157,87 @@ export function isWikipediaUrl(url: string): { lang: string; title: string } | n
   return null;
 }
 
+export type ThirdPartyProxyId = 'jina' | 'allorigins' | 'corsproxy';
+
+export interface ThirdPartyProxyInfo {
+  id: ThirdPartyProxyId;
+  name: string;
+  host: string;
+  description: string;
+}
+
+export const THIRD_PARTY_PROXIES: readonly ThirdPartyProxyInfo[] = [
+  {
+    id: 'jina',
+    name: 'Jina Reader',
+    host: 'r.jina.ai',
+    description: 'Extracts readable article Markdown via r.jina.ai',
+  },
+  {
+    id: 'allorigins',
+    name: 'AllOrigins',
+    host: 'api.allorigins.win',
+    description: 'Fetches page HTML via api.allorigins.win',
+  },
+  {
+    id: 'corsproxy',
+    name: 'corsproxy.io',
+    host: 'corsproxy.io',
+    description: 'Fetches page HTML via corsproxy.io',
+  },
+] as const;
+
+export interface ExtractUrlOptions {
+  /**
+   * Explicitly user-approved third-party proxy provider.
+   * Third-party proxies (r.jina.ai, api.allorigins.win, corsproxy.io) are NEVER
+   * contacted silently; they are only used when this field is explicitly set
+   * after user confirmation.
+   */
+  approvedProxy?: ThirdPartyProxyId;
+}
+
+export class ThirdPartyProxyConsentRequiredError extends Error {
+  readonly code = 'PROXY_CONSENT_REQUIRED';
+  readonly url: string;
+  readonly reason: string;
+
+  constructor(url: string, reason?: string) {
+    const resolvedReason =
+      reason ||
+      "Couldn't fetch this page directly. The website may block automated requests, require login, or restrict cross-origin access.";
+    super(resolvedReason);
+    this.name = 'ThirdPartyProxyConsentRequiredError';
+    this.url = url;
+    this.reason = resolvedReason;
+  }
+}
+
+export function isThirdPartyProxyConsentError(
+  err: unknown
+): err is ThirdPartyProxyConsentRequiredError {
+  return (
+    err instanceof ThirdPartyProxyConsentRequiredError ||
+    (typeof err === 'object' &&
+      err !== null &&
+      (err as { code?: unknown }).code === 'PROXY_CONSENT_REQUIRED' &&
+      typeof (err as { url?: unknown }).url === 'string')
+  );
+}
+
 /**
  * Fetches and extracts readable text from a URL.
+ *
+ * By default, ONLY first-party / own-backend direct fetches are performed.
+ * If direct fetching fails, throws ThirdPartyProxyConsentRequiredError so the UI
+ * can ask the user before sending the URL to any third-party proxy
+ * (r.jina.ai, api.allorigins.win, or corsproxy.io).
  */
 export async function extractUrl(
   urlInput: string,
   onProgress?: UrlProgressCallback,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options?: ExtractUrlOptions
 ): Promise<ReaderDocument> {
   const url = formatValidUrl(urlInput);
 
@@ -171,14 +245,17 @@ export async function extractUrl(
     throw new DOMException('Aborted', 'AbortError');
   }
 
-  onProgress?.(15, 'Connecting to website...');
-
   let html = '';
   let markdownText = '';
   let fetchSuccessful = false;
+  let directFailureReason: string | undefined;
 
   // Helper to fetch with timeout and external signal propagation
-  const fetchWithTimeout = async (targetUrl: string, timeoutMs: number, headers?: Record<string, string>) => {
+  const fetchWithTimeout = async (
+    targetUrl: string,
+    timeoutMs: number,
+    init?: RequestInit
+  ) => {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     const onExternalAbort = () => controller.abort();
@@ -186,8 +263,8 @@ export async function extractUrl(
 
     try {
       const res = await fetch(targetUrl, {
+        ...init,
         signal: controller.signal,
-        headers,
       });
       clearTimeout(timeoutId);
       if (signal) signal.removeEventListener('abort', onExternalAbort);
@@ -199,116 +276,202 @@ export async function extractUrl(
     }
   };
 
-  // Step 1: Special optimization for Wikipedia (native CORS, ad-free clean HTML)
   const wikiInfo = isWikipediaUrl(url);
-  if (wikiInfo) {
-    try {
-      onProgress?.(30, 'Extracting Wikipedia article...');
-      const wikiApiUrl = `https://${wikiInfo.lang}.wikipedia.org/api/rest_v1/page/html/${encodeURIComponent(wikiInfo.title)}`;
-      const res = await fetchWithTimeout(wikiApiUrl, 7000, {
-        'Api-User-Agent': 'ADHDReader/1.0',
-      });
-      if (res.ok) {
-        html = await res.text();
-        fetchSuccessful = true;
-      }
-    } catch {
-      // Fall through to standard extraction
-    }
-  }
+  const approvedProxy = options?.approvedProxy;
 
-  if (signal?.aborted) {
-    throw new DOMException('Aborted', 'AbortError');
-  }
+  if (approvedProxy) {
+    // Explicit user-approved third-party proxy path — contact ONLY the approved service
+    if (approvedProxy === 'jina') {
+      onProgress?.(40, 'Fetching via user-approved r.jina.ai...');
+      let backendHandled = false;
+      try {
+        const res = await fetchWithTimeout('/api/extract-url', 9500, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url, thirdPartyProxy: 'jina' }),
+        });
 
-  // Step 2: Internal server extraction endpoint (bypasses browser CORS completely)
-  if (!fetchSuccessful) {
-    try {
-      onProgress?.(35, 'Fetching article text...');
-      const serverApiUrl = `/api/extract-url?url=${encodeURIComponent(url)}`;
-      const res = await fetchWithTimeout(serverApiUrl, 9000);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.html) {
-          html = data.html;
-          fetchSuccessful = true;
-        } else if (data.markdown) {
+        const data = await res.json().catch(() => null);
+        if (res.ok && data?.markdown) {
           markdownText = data.markdown;
           fetchSuccessful = true;
+          backendHandled = true;
+        } else if (res.status === 400 && data?.code === 'BLOCKED_URL') {
+          throw new Error(data.error || 'This URL cannot be fetched.');
+        } else if (res.status === 422 || res.status === 413) {
+          backendHandled = true;
+          directFailureReason = data?.error;
+        }
+      } catch (err: any) {
+        if (err?.name === 'AbortError' || signal?.aborted) throw err;
+        if (err instanceof Error && err.message && err.message.includes('cannot be fetched')) {
+          throw err;
+        }
+        // Backend unreachable (e.g. standalone Chrome extension) -> direct approved fetch to r.jina.ai
+      }
+
+      if (!fetchSuccessful && !backendHandled) {
+        try {
+          const jinaRes = await fetchWithTimeout(`https://r.jina.ai/${url}`, 8500, {
+            headers: {
+              Accept: 'text/plain',
+            },
+          });
+          if (jinaRes.ok) {
+            const text = await jinaRes.text();
+            if (text && text.trim().length > 50) {
+              markdownText = text;
+              fetchSuccessful = true;
+            }
+          }
+        } catch (err: any) {
+          if (err?.name === 'AbortError' || signal?.aborted) throw err;
         }
       }
-    } catch {
-      // Server endpoint unavailable (e.g. static extension or offline), continue to fallbacks
-    }
-  }
-
-  if (signal?.aborted) {
-    throw new DOMException('Aborted', 'AbortError');
-  }
-
-  // Step 3: Direct browser fetch (works if the target site allows CORS)
-  if (!fetchSuccessful) {
-    try {
-      onProgress?.(50, 'Contacting host directly...');
-      const res = await fetchWithTimeout(url, 4000, {
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      });
-      if (res.ok) {
-        html = await res.text();
-        fetchSuccessful = true;
+    } else if (approvedProxy === 'allorigins') {
+      onProgress?.(40, 'Fetching via user-approved api.allorigins.win...');
+      try {
+        const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+        const res = await fetchWithTimeout(proxyUrl, 7000);
+        if (res.ok) {
+          const json = await res.json();
+          if (json?.contents) {
+            html = json.contents;
+            fetchSuccessful = true;
+          }
+        }
+      } catch (err: any) {
+        if (err?.name === 'AbortError' || signal?.aborted) throw err;
       }
-    } catch {
-      // Direct fetch blocked by browser CORS policy
+    } else if (approvedProxy === 'corsproxy') {
+      onProgress?.(40, 'Fetching via user-approved corsproxy.io...');
+      try {
+        const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
+        const res = await fetchWithTimeout(proxyUrl, 7000);
+        if (res.ok) {
+          const text = await res.text();
+          if (text && text.trim().length > 30) {
+            html = text;
+            fetchSuccessful = true;
+          }
+        }
+      } catch (err: any) {
+        if (err?.name === 'AbortError' || signal?.aborted) throw err;
+      }
     }
-  }
 
-  if (signal?.aborted) {
-    throw new DOMException('Aborted', 'AbortError');
-  }
+    if (signal?.aborted) {
+      throw new DOMException('Aborted', 'AbortError');
+    }
 
-  // Step 4: CORS Proxy 1 (AllOrigins JSON proxy)
-  if (!fetchSuccessful) {
-    try {
-      onProgress?.(65, 'Reading via web proxy...');
-      const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
-      const res = await fetchWithTimeout(proxyUrl, 5000);
-      if (res.ok) {
-        const json = await res.json();
-        if (json.contents) {
-          html = json.contents;
+    if (!fetchSuccessful || (!html && !markdownText)) {
+      const proxyMeta = THIRD_PARTY_PROXIES.find((p) => p.id === approvedProxy);
+      throw new ThirdPartyProxyConsentRequiredError(
+        url,
+        directFailureReason ||
+          `Could not extract this page via ${proxyMeta?.host || approvedProxy}. You can try another proxy or paste the article text directly.`
+      );
+    }
+  } else {
+    onProgress?.(15, 'Connecting to website...');
+
+    // Step 1: Wikipedia first-party REST API (native CORS, ad-free clean HTML from Wikipedia itself)
+    if (wikiInfo) {
+      try {
+        onProgress?.(30, 'Extracting Wikipedia article...');
+        const wikiApiUrl = `https://${wikiInfo.lang}.wikipedia.org/api/rest_v1/page/html/${encodeURIComponent(wikiInfo.title)}`;
+        const res = await fetchWithTimeout(wikiApiUrl, 7000, {
+          headers: {
+            'Api-User-Agent': 'KhoroosReader/1.0',
+          },
+        });
+        if (res.ok) {
+          html = await res.text();
           fetchSuccessful = true;
         }
+      } catch (err: any) {
+        if (err?.name === 'AbortError' || signal?.aborted) throw err;
+        // Fall through to backend direct fetch
       }
-    } catch {
-      // Proxy 1 failed or timed out
     }
-  }
 
-  if (signal?.aborted) {
-    throw new DOMException('Aborted', 'AbortError');
-  }
+    if (signal?.aborted) {
+      throw new DOMException('Aborted', 'AbortError');
+    }
 
-  // Step 5: CORS Proxy 2 (corsproxy.io)
-  if (!fetchSuccessful) {
-    try {
-      onProgress?.(80, 'Trying alternate proxy...');
-      const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
-      const res = await fetchWithTimeout(proxyUrl, 5000);
-      if (res.ok) {
-        html = await res.text();
-        fetchSuccessful = true;
+    // Step 2: Khoroos Reader backend direct fetch (/api/extract-url — never silently uses third-party proxies)
+    if (!fetchSuccessful) {
+      try {
+        onProgress?.(35, 'Fetching article text via Khoroos Reader server...');
+        const res = await fetchWithTimeout('/api/extract-url', 9500, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url }),
+        });
+        const data = typeof res.json === 'function' ? await res.json().catch(() => null) : null;
+
+        if (res.ok && data?.html) {
+          html = data.html;
+          fetchSuccessful = true;
+        } else if (res.ok && data?.markdown) {
+          markdownText = data.markdown;
+          fetchSuccessful = true;
+        } else if (
+          data?.code === 'BLOCKED_URL' ||
+          data?.code === 'UNSUPPORTED_CONTENT' ||
+          data?.code === 'RESPONSE_TOO_LARGE'
+        ) {
+          throw new Error(data.error || 'This URL cannot be imported.');
+        } else if (data?.error) {
+          directFailureReason = data.error;
+        }
+      } catch (err: any) {
+        if (err?.name === 'AbortError' || signal?.aborted) throw err;
+        if (
+          err instanceof Error &&
+          (err.message.includes('cannot be fetched') ||
+            err.message.includes('cannot be imported') ||
+            err.message.includes('Only http://') ||
+            err.message.includes('5 MB import limit') ||
+            err.message.includes('non-text content'))
+        ) {
+          throw err;
+        }
+        // Backend endpoint unavailable (e.g. static extension), try direct browser fetch
       }
-    } catch {
-      // Proxy 2 failed
     }
-  }
 
-  if (signal?.aborted) {
-    throw new DOMException('Aborted', 'AbortError');
-  }
+    if (signal?.aborted) {
+      throw new DOMException('Aborted', 'AbortError');
+    }
 
-  if (!fetchSuccessful || (!html && !markdownText)) {
-    throw new Error("Couldn't extract this page. The website may block remote access, require login, or be behind a paywall.");
+    // Step 3: Direct browser fetch to the target origin itself (works when the site allows CORS)
+    if (!fetchSuccessful) {
+      try {
+        onProgress?.(55, 'Contacting host directly...');
+        const res = await fetchWithTimeout(url, 4000, {
+          headers: {
+            Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          },
+        });
+        if (res.ok) {
+          html = await res.text();
+          fetchSuccessful = true;
+        }
+      } catch (err: any) {
+        if (err?.name === 'AbortError' || signal?.aborted) throw err;
+        // Direct fetch blocked by browser CORS policy
+      }
+    }
+
+    if (signal?.aborted) {
+      throw new DOMException('Aborted', 'AbortError');
+    }
+
+    // Step 4: Stop before contacting any third-party proxy — ask the user explicitly!
+    if (!fetchSuccessful || (!html && !markdownText)) {
+      throw new ThirdPartyProxyConsentRequiredError(url, directFailureReason);
+    }
   }
 
   // If we received markdown (from reader API):
@@ -361,9 +524,10 @@ export async function extractUrl(
 export async function fetchUrlPreview(
   urlInput: string,
   wpm: number = 300,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options?: ExtractUrlOptions
 ): Promise<UrlPreviewData> {
-  const doc = await extractUrl(urlInput, undefined, signal);
+  const doc = await extractUrl(urlInput, undefined, signal, options);
   const wordCount = doc.metadata?.wordCount || countWords(doc.content);
   const readingSpeed = Math.max(50, wpm || 300);
   const estimatedMinutes = Math.max(1, Math.round((wordCount / readingSpeed) * 10) / 10);

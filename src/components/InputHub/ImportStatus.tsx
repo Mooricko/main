@@ -1,25 +1,135 @@
 import React from 'react';
-import { Loader2, AlertCircle, RefreshCw, Clipboard, UploadCloud, CheckCircle2, ExternalLink } from 'lucide-react';
+import {
+  Loader2,
+  AlertCircle,
+  RefreshCw,
+  Clipboard,
+  UploadCloud,
+  CheckCircle2,
+  ExternalLink,
+  ShieldAlert,
+} from 'lucide-react';
 import { ImportState } from '../../types';
+import {
+  THIRD_PARTY_PROXIES,
+  type ThirdPartyProxyId,
+} from '../../services/import/extractUrl';
 
 interface ImportStatusProps {
   state: ImportState;
   onRetry?: () => void;
+  onApproveProxy?: (proxyId: ThirdPartyProxyId) => void;
   onPasteFallback?: () => void;
   onChooseAnotherFile?: () => void;
   onDismiss?: () => void;
 }
 
+function getSafeHttpHref(rawUrl?: string): string | null {
+  if (!rawUrl) return null;
+  try {
+    const candidate = /^https?:\/\//i.test(rawUrl.trim())
+      ? rawUrl.trim()
+      : `https://${rawUrl.trim()}`;
+    const parsed = new URL(candidate);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return parsed.toString();
+    }
+  } catch {
+    // Ignore invalid URL
+  }
+  return null;
+}
+
 export const ImportStatus: React.FC<ImportStatusProps> = ({
   state,
   onRetry,
+  onApproveProxy,
   onPasteFallback,
   onChooseAnotherFile,
   onDismiss,
 }) => {
   if (state.stage === 'idle') return null;
 
+  const safeSourceUrl = getSafeHttpHref(state.sourceUrl);
+
   if (state.stage === 'error') {
+    if (state.requiresProxyConsent && safeSourceUrl && onApproveProxy) {
+      return (
+        <div
+          id="import-proxy-consent-banner"
+          className="w-full p-4 rounded-2xl bg-amber-950/40 border border-amber-700/60 text-slate-200 animate-in fade-in slide-in-from-top-1 duration-200"
+        >
+          <div className="flex items-start gap-3">
+            <div className="w-8 h-8 rounded-xl bg-amber-500/20 flex items-center justify-center text-amber-400 shrink-0 mt-0.5">
+              <ShieldAlert className="w-5 h-5" />
+            </div>
+
+            <div className="flex-1 min-w-0">
+              <h4 className="text-sm font-semibold text-amber-200">
+                Direct fetch couldn&apos;t load this page — send to a third-party proxy?
+              </h4>
+              <p className="text-xs text-amber-100/85 mt-1 leading-relaxed">
+                {state.error ||
+                  "Khoroos Reader's backend couldn't fetch this page directly."}
+              </p>
+              <p className="text-[11px] text-slate-300 mt-1.5 leading-relaxed">
+                Choosing a service below sends this URL to that third party. Only allow this for public articles—never for private, unlisted, or logged-in links.
+              </p>
+
+              <div className="flex flex-wrap items-center gap-2 mt-3 select-none">
+                {THIRD_PARTY_PROXIES.map((proxy) => (
+                  <button
+                    key={proxy.id}
+                    id={`import-approve-proxy-${proxy.id}`}
+                    type="button"
+                    onClick={() => onApproveProxy(proxy.id)}
+                    title={proxy.description}
+                    className="px-3 py-1.5 rounded-lg bg-amber-600/90 hover:bg-amber-500 text-white text-xs font-semibold transition-colors cursor-pointer"
+                  >
+                    Send to {proxy.host}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 mt-2.5 pt-2.5 border-t border-amber-800/40 select-none">
+                <a
+                  href={safeSourceUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-3 py-1.5 rounded-lg bg-blue-950/70 hover:bg-blue-900/80 text-blue-300 text-xs font-medium flex items-center gap-1.5 transition-colors border border-blue-800/60"
+                  title="Open webpage in new tab to view and copy"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Open page to copy</span>
+                </a>
+
+                {onPasteFallback && (
+                  <button
+                    type="button"
+                    onClick={onPasteFallback}
+                    className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium flex items-center gap-1.5 transition-colors border border-slate-700 cursor-pointer"
+                  >
+                    <Clipboard className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Paste article text</span>
+                  </button>
+                )}
+
+                {onDismiss && (
+                  <button
+                    type="button"
+                    onClick={onDismiss}
+                    className="px-2.5 py-1.5 text-xs text-slate-400 hover:text-slate-300 transition-colors cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div 
         id="import-error-banner"
@@ -42,10 +152,10 @@ export const ImportStatus: React.FC<ImportStatusProps> = ({
                 : 'Try copying the text directly or choosing another document.'}
             </p>
 
-            <div className="flex flex-wrap items-center gap-2 mt-3">
-              {state.sourceUrl && (
+            <div className="flex flex-wrap items-center gap-2 mt-3 select-none">
+              {safeSourceUrl && (
                 <a
-                  href={state.sourceUrl}
+                  href={safeSourceUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="px-3 py-1.5 rounded-lg bg-blue-950/70 hover:bg-blue-900/80 text-blue-300 text-xs font-medium flex items-center gap-1.5 transition-colors border border-blue-800/60"
@@ -60,7 +170,7 @@ export const ImportStatus: React.FC<ImportStatusProps> = ({
                 <button
                   type="button"
                   onClick={onPasteFallback}
-                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium flex items-center gap-1.5 transition-colors border border-slate-700"
+                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium flex items-center gap-1.5 transition-colors border border-slate-700 cursor-pointer"
                 >
                   <Clipboard className="w-3.5 h-3.5 text-slate-400" />
                   <span>Paste article text</span>
@@ -72,7 +182,7 @@ export const ImportStatus: React.FC<ImportStatusProps> = ({
                   type="button"
                   id="import-retry-button"
                   onClick={onRetry}
-                  className="px-3 py-1.5 rounded-lg bg-red-600/80 hover:bg-red-600 text-white text-xs font-medium flex items-center gap-1.5 transition-colors"
+                  className="px-3 py-1.5 rounded-lg bg-red-600/80 hover:bg-red-600 text-white text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
                   <span>Retry</span>
@@ -83,7 +193,7 @@ export const ImportStatus: React.FC<ImportStatusProps> = ({
                 <button
                   type="button"
                   onClick={onChooseAnotherFile}
-                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium flex items-center gap-1.5 transition-colors border border-slate-700"
+                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium flex items-center gap-1.5 transition-colors border border-slate-700 cursor-pointer"
                 >
                   <UploadCloud className="w-3.5 h-3.5 text-slate-400" />
                   <span>Try another file</span>
@@ -94,7 +204,7 @@ export const ImportStatus: React.FC<ImportStatusProps> = ({
                 <button
                   type="button"
                   onClick={onDismiss}
-                  className="px-2.5 py-1.5 text-xs text-slate-400 hover:text-slate-300 transition-colors"
+                  className="px-2.5 py-1.5 text-xs text-slate-400 hover:text-slate-300 transition-colors cursor-pointer"
                 >
                   Dismiss
                 </button>

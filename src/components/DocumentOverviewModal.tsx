@@ -12,7 +12,7 @@
  * Consistent with ADHD Reader dark/red theme, fast & lightweight.
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { 
   Play, 
   RotateCcw, 
@@ -42,6 +42,7 @@ import { DocumentMinimap } from './DocumentMinimap';
 import { PageJumpControl } from './PageJumpControl';
 import { ChapterNavPanel } from './ChapterNavPanel';
 import { DocumentSearchBox } from './DocumentSearchBox';
+import { useDialogFocusTrap } from '../hooks/useDialogFocusTrap';
 
 interface DocumentOverviewModalProps {
   isOpen: boolean;
@@ -69,6 +70,13 @@ export const DocumentOverviewModal: React.FC<DocumentOverviewModalProps> = ({
   settings,
 }) => {
   const [resolvedPosition, setResolvedPosition] = useState<ResolvedDocumentPosition | null>(null);
+  const modalRef = useRef<HTMLDivElement>(null);
+
+  useDialogFocusTrap({
+    isOpen,
+    containerRef: modalRef,
+    onClose,
+  });
 
   // Resolve current reading position when modal opens or index changes
   useEffect(() => {
@@ -170,9 +178,20 @@ export const DocumentOverviewModal: React.FC<DocumentOverviewModalProps> = ({
   const hasPreviousProgress = currentWordIndex > 10;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
-      <div 
-        className="w-full max-w-xl rounded-2xl border border-slate-800 bg-slate-950/95 shadow-2xl flex flex-col max-h-[92vh] overflow-hidden text-slate-200"
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        id="document-overview-modal"
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="document-overview-modal-title"
+        tabIndex={-1}
+        className="w-full max-w-xl rounded-2xl border border-slate-800 bg-slate-950/95 shadow-2xl flex flex-col max-h-[92vh] overflow-hidden text-slate-200 focus:outline-none"
       >
         {/* Header: Title and Source-aware Stats */}
         <div className="flex items-start justify-between px-5 sm:px-6 pt-5 pb-4 border-b border-slate-800/80">
@@ -185,7 +204,7 @@ export const DocumentOverviewModal: React.FC<DocumentOverviewModalProps> = ({
                 {sourceType}
               </span>
             </div>
-            <h2 className="text-lg sm:text-xl font-bold text-white tracking-tight truncate">
+            <h2 id="document-overview-modal-title" className="text-lg sm:text-xl font-bold text-white tracking-tight truncate">
               {title}
             </h2>
             <p className="text-xs text-slate-400 font-mono mt-0.5">

@@ -3,7 +3,7 @@ import { detectInputType, isUrlString, isMarkdownString } from './detectInput';
 import { extractTxt } from './extractTxt';
 import { extractMarkdown, cleanMarkdownContent } from './extractMarkdown';
 import { extractPdf } from './extractPdf';
-import { extractUrl } from './extractUrl';
+import { extractUrl, type ThirdPartyProxyId } from './extractUrl';
 import { normalizeText, extractSuggestedTitle, detectTextDirection, countWords } from '../../utils/normalizeText';
 import { measureDevAsyncTiming } from '../../utils/performanceDiagnostics';
 
@@ -45,6 +45,7 @@ export async function processUniversalInput(
     fileName?: string;
     title?: string;
     onProgress?: ProgressCallback;
+    approvedProxy?: ThirdPartyProxyId;
   }
 ): Promise<ReaderDocument> {
   return await measureDevAsyncTiming(
@@ -82,7 +83,9 @@ export async function processUniversalInput(
           if (!urlStr) {
             throw new Error('Invalid URL provided.');
           }
-          return await extractUrl(urlStr, onProgress);
+          return await extractUrl(urlStr, onProgress, undefined, {
+            approvedProxy: options?.approvedProxy,
+          });
         }
 
         case 'text':
@@ -101,7 +104,9 @@ export async function processUniversalInput(
 
           // Check if it's a single URL before parsing as markdown
           if (isUrlString(rawText.trim())) {
-            return await extractUrl(rawText.trim(), onProgress);
+            return await extractUrl(rawText.trim(), onProgress, undefined, {
+              approvedProxy: options?.approvedProxy,
+            });
           }
 
           // Check if it's actually Markdown disguised as plain text

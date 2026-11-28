@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   X, 
   Sparkles, 
@@ -25,6 +25,7 @@ import {
 } from '../services/focus/focusMilestoneService';
 import { ThemeConfig } from '../utils/themeStyles';
 import { triggerFocusBlockConfetti, triggerMiniConfetti } from '../utils/confettiCelebration';
+import { useDialogFocusTrap } from '../hooks/useDialogFocusTrap';
 
 interface FocusMilestoneModalProps {
   isOpen: boolean;
@@ -83,6 +84,13 @@ export const FocusMilestoneModal: React.FC<FocusMilestoneModalProps> = ({
   onStartNextBlock,
 }) => {
   const [activeTab, setActiveTab] = useState<'summary' | 'milestones'>('summary');
+  const modalRef = useRef<HTMLDivElement>(null);
+
+  useDialogFocusTrap({
+    isOpen,
+    containerRef: modalRef,
+    onClose,
+  });
 
   // Trigger celebration chime on open if newly unlocked
   useEffect(() => {
@@ -90,16 +98,6 @@ export const FocusMilestoneModal: React.FC<FocusMilestoneModalProps> = ({
       playCelebrationChime();
     }
   }, [isOpen]);
-
-  // Handle escape key
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
@@ -136,7 +134,12 @@ export const FocusMilestoneModal: React.FC<FocusMilestoneModalProps> = ({
     >
       <div
         id="focus-milestone-modal"
-        className={`w-full max-w-xl max-h-[92vh] flex flex-col rounded-2xl border ${theme.borderClass} ${theme.cardBgClass} shadow-2xl overflow-hidden animate-modal-slide-fade`}
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="focus-milestone-modal-title"
+        tabIndex={-1}
+        className={`w-full max-w-xl max-h-[92vh] flex flex-col rounded-2xl border ${theme.borderClass} ${theme.cardBgClass} shadow-2xl overflow-hidden animate-modal-slide-fade focus:outline-none`}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header with celebration banner */}
@@ -160,7 +163,7 @@ export const FocusMilestoneModal: React.FC<FocusMilestoneModalProps> = ({
               </div>
               <div>
                 <div className="flex items-center gap-2">
-                  <h3 className={`text-base sm:text-lg font-bold tracking-tight ${theme.textPrimary}`}>
+                  <h3 id="focus-milestone-modal-title" className={`text-base sm:text-lg font-bold tracking-tight ${theme.textPrimary}`}>
                     Focus Session Complete!
                   </h3>
                   <span 

@@ -15,6 +15,7 @@ import {
   Trophy
 } from 'lucide-react';
 import { ThemeConfig } from '../utils/themeStyles';
+import { useDialogFocusTrap, isTopmostDialog } from '../hooks/useDialogFocusTrap';
 
 interface FocusTimerModalProps {
   isOpen: boolean;
@@ -67,10 +68,18 @@ export const FocusTimerModal: React.FC<FocusTimerModalProps> = ({
   const [customMinutes, setCustomMinutes] = useState<number>(15);
   const modalRef = useRef<HTMLDivElement>(null);
 
+  useDialogFocusTrap({
+    isOpen,
+    containerRef: modalRef,
+    onClose,
+  });
+
   useEffect(() => {
     if (!isOpen) return;
 
     const handlePointerDown = (event: MouseEvent | TouchEvent) => {
+      if (!isTopmostDialog(modalRef.current)) return;
+
       const target = event.target as HTMLElement;
       if (
         target?.closest?.('#open-timer-modal-btn') ||
@@ -114,8 +123,12 @@ export const FocusTimerModal: React.FC<FocusTimerModalProps> = ({
       <div 
         id="focus-timer-modal"
         ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="focus-timer-modal-title"
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
-        className={`w-full max-w-md ${theme.cardBgClass} border ${theme.borderClass} rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-modal-slide-fade`}
+        className={`w-full max-w-md ${theme.cardBgClass} border ${theme.borderClass} rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-modal-slide-fade focus:outline-none`}
       >
         {/* Modal Header */}
         <div className={`flex items-center justify-between px-5 py-4 border-b ${theme.borderClass}`}>
@@ -127,7 +140,7 @@ export const FocusTimerModal: React.FC<FocusTimerModalProps> = ({
               <TimerIcon className="w-5 h-5" />
             </div>
             <div>
-              <h3 className={`text-base font-bold ${theme.textPrimary}`}>
+              <h3 id="focus-timer-modal-title" className={`text-base font-bold ${theme.textPrimary}`}>
                 Reading Focus Timer
               </h3>
               <p className={`text-xs ${theme.textMuted}`}>

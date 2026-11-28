@@ -28,7 +28,6 @@ interface HeaderProps {
   onOpenSidebar?: () => void;
   onOpenSettings: () => void;
   onOpenShortcuts: () => void;
-  onOpenExtensionHub: () => void;
   isFullscreen: boolean;
   onToggleFullscreen: () => void;
   currentTitle: string;
@@ -50,7 +49,6 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenSidebar,
   onOpenSettings,
   onOpenShortcuts,
-  onOpenExtensionHub,
   isFullscreen,
   onToggleFullscreen,
   currentTitle,
@@ -155,13 +153,13 @@ export const Header: React.FC<HeaderProps> = ({
             )}
           </button>
 
-          {/* Help Button */}
+          {/* Help & Keyboard Shortcuts Button */}
           <button
             id="open-extension-hub-btn"
             type="button"
-            onClick={onOpenExtensionHub}
-            title="Help"
-            aria-label="Help"
+            onClick={onOpenShortcuts}
+            title="Help & Keyboard Shortcuts (?)"
+            aria-label="Help & Keyboard Shortcuts"
             className={`p-2 rounded-lg border ${theme.borderClass} ${theme.textMuted} hover:${theme.textPrimary} hover:${theme.accentSurface} transition-colors flex items-center justify-center`}
           >
             <span className="w-4 h-4 flex items-center justify-center text-xs font-bold leading-none select-none">

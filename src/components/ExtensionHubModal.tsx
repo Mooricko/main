@@ -28,6 +28,7 @@ import { downloadExtensionPackage } from '../utils/extensionPacker';
 import { isChromeExtensionEnvironment, captureActiveTabText } from '../utils/extensionBridge';
 import { farsiOfflineTts, SAMPLE_FARSI_TEXT } from '../services/tts/farsiOfflineTTS';
 import { PiperCacheInfo, FarsiTtsEngineType } from '../services/tts/types';
+import { useDialogFocusTrap } from '../hooks/useDialogFocusTrap';
 
 const KEYBOARD_SHORTCUTS = [
   { key: 'Space', desc: 'Play / Pause reader (or resume after Smart Auto-Pause)' },
@@ -51,6 +52,7 @@ const KEYBOARD_SHORTCUTS = [
   { key: 'D', desc: 'Toggle Dark / Light Theme mode' },
   { key: 'S', desc: 'Toggle Metronome focus sound' },
   { key: 'V', desc: 'Toggle Voice-Over Narration (Web Speech API)' },
+  { key: '?', desc: 'Open Help & Keyboard Shortcuts' },
   { key: 'Esc', desc: 'Close modals / Exit Fullscreen' },
 ];
 
@@ -111,6 +113,13 @@ export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
   const [captureFeedback, setCaptureFeedback] = useState<string | null>(null);
   const [isCapturingActiveTab, setIsCapturingActiveTab] = useState(false);
   const simulatorContainerRef = useRef<HTMLDivElement>(null);
+  const modalRef = useRef<HTMLDivElement>(null);
+
+  useDialogFocusTrap({
+    isOpen,
+    containerRef: modalRef,
+    onClose,
+  });
 
   const isExtensionEnv = isChromeExtensionEnvironment();
   const theme = THEME_CONFIGS[settings.theme];
@@ -202,10 +211,20 @@ export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-xs animate-in fade-in duration-200">
-      <div 
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-xs animate-in fade-in duration-200"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
         id="extension-hub-modal"
-        className={`w-full max-w-3xl h-[640px] max-h-[90vh] rounded-2xl border ${theme.borderClass} ${theme.cardBgClass} shadow-2xl flex flex-col overflow-hidden animate-modal-slide-fade`}
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="extension-hub-modal-title"
+        tabIndex={-1}
+        className={`w-full max-w-3xl h-[640px] max-h-[90vh] rounded-2xl border ${theme.borderClass} ${theme.cardBgClass} shadow-2xl flex flex-col overflow-hidden animate-modal-slide-fade focus:outline-none`}
       >
         {/* Modal Header */}
         <div className={`flex items-center justify-between px-5 sm:px-6 py-4 border-b ${theme.borderClass}`}>
@@ -215,7 +234,7 @@ export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h3 className={`text-base sm:text-lg font-bold ${theme.textPrimary}`}>
+                <h3 id="extension-hub-modal-title" className={`text-base sm:text-lg font-bold ${theme.textPrimary}`}>
                   Web Capture, Extension & Shortcuts
                 </h3>
                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">

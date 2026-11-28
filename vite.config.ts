@@ -3,14 +3,12 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 import fs from 'fs';
 import {defineConfig} from 'vite';
-import {urlExtractPlugin} from './src/server/urlExtractPlugin';
 
 export default defineConfig(() => {
   return {
     plugins: [
       react(),
       tailwindcss(),
-      urlExtractPlugin(),
       {
         name: 'vite-no-cache-deps-plugin',
         configureServer(server) {

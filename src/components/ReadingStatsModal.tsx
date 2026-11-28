@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
 import { 
   X, 
   TrendingUp, 
@@ -28,6 +28,7 @@ import {
 import { ReaderSettings, ReadingStatsSummary, WpmHistoryPoint, SessionSpeedProgressPoint } from '../types';
 import { THEME_CONFIGS, HIGHLIGHT_COLORS } from '../utils/themeStyles';
 import { ActivityHeatmap, ActivityDatum, formatCompact } from './ActivityHeatmap';
+import { useDialogFocusTrap } from '../hooks/useDialogFocusTrap';
 
 interface ReadingStatsModalProps {
   isOpen: boolean;
@@ -50,6 +51,13 @@ export const ReadingStatsModal: React.FC<ReadingStatsModalProps> = ({
   const [showConfirmReset, setShowConfirmReset] = useState(false);
   const [heatmapMetric, setHeatmapMetric] = useState<'words' | 'minutes'>('words');
   const [heatmapDays, setHeatmapDays] = useState<number>(365);
+  const modalRef = useRef<HTMLDivElement>(null);
+
+  useDialogFocusTrap({
+    isOpen,
+    containerRef: modalRef,
+    onClose,
+  });
 
   const theme = THEME_CONFIGS[settings.theme];
   const highlight = HIGHLIGHT_COLORS[settings.highlightColor];
@@ -113,18 +121,6 @@ export const ReadingStatsModal: React.FC<ReadingStatsModalProps> = ({
 
     return data;
   }, [statsSummary, heatmapMetric]);
-
-  // Close on Escape key
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
@@ -206,7 +202,12 @@ export const ReadingStatsModal: React.FC<ReadingStatsModalProps> = ({
     >
       <div 
         id="reading-stats-modal"
-        className={`w-full max-w-4xl max-h-[92vh] flex flex-col rounded-2xl border ${theme.borderClass} ${theme.cardBgClass} shadow-2xl overflow-hidden animate-modal-slide-fade`}
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="reading-stats-modal-title"
+        tabIndex={-1}
+        className={`w-full max-w-4xl max-h-[92vh] flex flex-col rounded-2xl border ${theme.borderClass} ${theme.cardBgClass} shadow-2xl overflow-hidden animate-modal-slide-fade focus:outline-none`}
       >
         {/* Modal Header */}
         <div className={`flex items-center justify-between px-6 py-4 border-b ${theme.borderClass} shrink-0`}>
@@ -223,7 +224,7 @@ export const ReadingStatsModal: React.FC<ReadingStatsModalProps> = ({
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className={`text-base sm:text-lg font-bold tracking-tight ${theme.textPrimary}`}>
+                <h2 id="reading-stats-modal-title" className={`text-base sm:text-lg font-bold tracking-tight ${theme.textPrimary}`}>
                   Reading Statistics & Analytics
                 </h2>
                 <span className={`px-2 py-0.5 rounded-md text-[11px] font-semibold border ${speedBadge.color}`}>

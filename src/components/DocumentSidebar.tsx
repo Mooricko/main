@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   X, 
   Layers, 
@@ -40,6 +40,7 @@ import { SAMPLE_TEXTS } from '../data/sampleTexts';
 import { isRtlText } from '../utils/textParser';
 import { documentStorageService } from '../services/document/documentStorageService';
 import { resolveOverviewStats } from '../services/document/overviewStats';
+import { useDialogFocusTrap } from '../hooks/useDialogFocusTrap';
 
 /**
  * Formats a date to the required display format:
@@ -136,6 +137,13 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = ({
 }) => {
   const [resolvedPosition, setResolvedPosition] = useState<ResolvedDocumentPosition | null>(null);
   const [overviewSubTab, setOverviewSubTab] = useState<'overview' | 'samples' | 'history'>('overview');
+  const sidebarRef = useRef<HTMLElement>(null);
+
+  useDialogFocusTrap({
+    isOpen,
+    containerRef: sidebarRef,
+    onClose,
+  });
 
   const theme = THEME_CONFIGS[settings.theme] || THEME_CONFIGS.midnight;
   const highlight = HIGHLIGHT_COLORS[settings.highlightColor] || HIGHLIGHT_COLORS.red;
@@ -349,11 +357,16 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = ({
       {/* 3. Left Sidebar Container */}
       <aside
         id="app-left-sidebar"
-        className={`fixed inset-y-0 left-0 z-50 w-full sm:w-[480px] md:w-[520px] max-w-[95vw] flex flex-col ${theme.cardBgClass} border-r ${theme.borderClass} shadow-2xl transition-all duration-300 ease-out ${
+        ref={sidebarRef}
+        role="dialog"
+        aria-modal={isOpen ? true : undefined}
+        aria-labelledby="document-sidebar-title"
+        aria-hidden={!isOpen}
+        inert={!isOpen}
+        tabIndex={-1}
+        className={`fixed inset-y-0 left-0 z-50 w-full sm:w-[480px] md:w-[520px] max-w-[95vw] flex flex-col ${theme.cardBgClass} border-r ${theme.borderClass} shadow-2xl transition-all duration-300 ease-out focus:outline-none ${
           isOpen ? 'translate-x-0 opacity-100 pointer-events-auto' : '-translate-x-full opacity-0 pointer-events-none'
         }`}
-        aria-label="Document and Library Sidebar"
-        aria-hidden={!isOpen}
       >
         {/* Sidebar Header */}
         <div className={`flex items-center justify-between px-5 py-3.5 border-b ${theme.borderClass} shrink-0`}>
@@ -366,7 +379,7 @@ export const DocumentSidebar: React.FC<DocumentSidebarProps> = ({
               )}
             </div>
             <div className="min-w-0">
-              <h2 className={`text-sm sm:text-base font-bold ${theme.textPrimary} truncate flex items-center gap-2`}>
+              <h2 id="document-sidebar-title" className={`text-sm sm:text-base font-bold ${theme.textPrimary} truncate flex items-center gap-2`}>
                 <span>Document & Library Hub</span>
               </h2>
               <p className={`text-xs ${theme.textMuted} truncate`}>

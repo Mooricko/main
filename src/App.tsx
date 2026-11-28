@@ -32,7 +32,6 @@ import { RSVPReader } from './components/RSVPReader';
 import { FlowReader } from './components/FlowReader';
 import { DocumentSidebar } from './components/DocumentSidebar';
 import { SettingsDrawer } from './components/SettingsDrawer';
-import { KeyboardShortcutsModal } from './components/KeyboardShortcutsModal';
 import { ExtensionHubModal } from './components/ExtensionHubModal';
 import { FocusTimerModal } from './components/FocusTimerModal';
 import { FocusMilestoneModal } from './components/FocusMilestoneModal';
@@ -349,7 +348,6 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [sidebarActiveTab, setSidebarActiveTab] = useState<'overview' | 'input'>('overview');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const [isExtensionHubOpen, setIsExtensionHubOpen] = useState(false);
   const [extensionHubInitialTab, setExtensionHubInitialTab] = useState<'shortcuts' | 'simulator' | 'install' | 'files'>('shortcuts');
   const [isTimerModalOpen, setIsTimerModalOpen] = useState(false);
@@ -1350,7 +1348,6 @@ export default function App() {
   const isAnyModalOpen =
     isSidebarOpen ||
     isSettingsOpen ||
-    isShortcutsOpen ||
     isExtensionHubOpen ||
     isTimerModalOpen ||
     isMilestoneModalOpen ||
@@ -1361,7 +1358,7 @@ export default function App() {
     const handleKeyDown = (e: KeyboardEvent) => {
       const action = resolveKeyboardShortcut(extractShortcutKeyEvent(e), {
         isAnyModalOpen,
-        isShortcutsModalOpen: isShortcutsOpen || isExtensionHubOpen,
+        isShortcutsModalOpen: isExtensionHubOpen,
         canUndoRestart,
       });
 
@@ -1472,7 +1469,6 @@ export default function App() {
         case 'close_modals':
           setIsSidebarOpen(false);
           setIsSettingsOpen(false);
-          setIsShortcutsOpen(false);
           setIsExtensionHubOpen(false);
           setIsTimerModalOpen(false);
           setIsMilestoneModalOpen(false);
@@ -1485,7 +1481,6 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [
     isAnyModalOpen,
-    isShortcutsOpen,
     isExtensionHubOpen,
     canUndoRestart,
     handleTogglePlay,
@@ -1530,7 +1525,6 @@ export default function App() {
       if (textToUse) {
         e.preventDefault();
         setIsSettingsOpen(false);
-        setIsShortcutsOpen(false);
         setIsExtensionHubOpen(false);
         setIsTimerModalOpen(false);
         setIsMilestoneModalOpen(false);
@@ -1547,7 +1541,6 @@ export default function App() {
       if (pastedFile) {
         e.preventDefault();
         setIsSettingsOpen(false);
-        setIsShortcutsOpen(false);
         setIsExtensionHubOpen(false);
         setIsTimerModalOpen(false);
         setIsMilestoneModalOpen(false);
@@ -1645,10 +1638,6 @@ export default function App() {
           onOpenSettings={() => setIsSettingsOpen(true)}
           onOpenShortcuts={() => {
             setExtensionHubInitialTab('shortcuts');
-            setIsExtensionHubOpen(true);
-          }}
-          onOpenExtensionHub={() => {
-            setExtensionHubInitialTab('simulator');
             setIsExtensionHubOpen(true);
           }}
           isFullscreen={isFullscreen}
@@ -1767,6 +1756,7 @@ export default function App() {
         onDeleteDocument={handleDeleteDocument}
         onOpenExtensionHub={() => {
           setIsSidebarOpen(false);
+          setExtensionHubInitialTab('simulator');
           setIsExtensionHubOpen(true);
         }}
         initialDroppedFile={pendingDroppedFile}
@@ -1801,12 +1791,6 @@ export default function App() {
         warmupStatus={warmupStatus}
         onResetWarmup={handleResetWarmup}
         isFarsiContent={isCurrentTextFarsi}
-      />
-
-      <KeyboardShortcutsModal
-        isOpen={isShortcutsOpen}
-        onClose={() => setIsShortcutsOpen(false)}
-        settings={settings}
       />
 
       {/* Focus Session Timer Modal (Requirement 4 & 5) */}

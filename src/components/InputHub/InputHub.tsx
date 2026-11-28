@@ -15,6 +15,10 @@ import { DropZone } from './DropZone';
 import { UrlInput } from './UrlInput';
 import { ImportStatus } from './ImportStatus';
 import { processUniversalInput, extractClipboardContent } from '../../services/import/extractText';
+import {
+  isThirdPartyProxyConsentError,
+  type ThirdPartyProxyId,
+} from '../../services/import/extractUrl';
 import { isUrlString, isMarkdownString } from '../../services/import/detectInput';
 import { calculateTextStats, isRtlText } from '../../utils/textParser';
 import { classifyDocumentScale } from '../../utils/performanceDiagnostics';
@@ -133,7 +137,8 @@ export const InputHub: React.FC<InputHubProps> = ({
   const handleProcessInput = async (
     input: File | Blob | string,
     forcedType?: any,
-    fileName?: string
+    fileName?: string,
+    approvedProxy?: ThirdPartyProxyId
   ) => {
     const importTxId = `import-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     currentImportIdRef.current = importTxId;
@@ -146,6 +151,7 @@ export const InputHub: React.FC<InputHubProps> = ({
         forcedType,
         fileName,
         title: docTitle || undefined,
+        approvedProxy,
         onProgress: (percent, message) => {
           if (currentImportIdRef.current !== importTxId) return;
           let stage: any = 'extracting';
@@ -217,12 +223,24 @@ export const InputHub: React.FC<InputHubProps> = ({
     } catch (err: any) {
       if (currentImportIdRef.current !== importTxId) return;
       console.error('Import failure:', err);
+      if (isThirdPartyProxyConsentError(err)) {
+        setLastAttemptedUrl(err.url);
+        setImportState({
+          stage: 'error',
+          error: err.reason,
+          detectedType: 'url',
+          sourceUrl: err.url,
+          requiresProxyConsent: true,
+        });
+        return;
+      }
       const isUrl = typeof input === 'string' && isUrlString(input);
       setImportState({
         stage: 'error',
-        error: "Couldn't finish preparing this document.",
+        error: err?.message || "Couldn't finish preparing this document.",
         detectedType: typeof input === 'string' ? (isUrl ? 'url' : 'text') : (input as File).name?.endsWith('.pdf') ? 'pdf' : 'text',
         sourceUrl: isUrl ? (input as string) : undefined,
+        requiresProxyConsent: false,
       });
     }
   };
@@ -269,7 +287,11 @@ export const InputHub: React.FC<InputHubProps> = ({
   }, [initialDroppedText]);
 
   // URL submitted from URL input or detected
-  const handleImportUrl = (url: string, preloadedDoc?: ReaderDocument) => {
+  const handleImportUrl = (
+    url: string,
+    preloadedDoc?: ReaderDocument,
+    approvedProxy?: ThirdPartyProxyId
+  ) => {
     setLastAttemptedUrl(url);
     setLastAttemptedFile(null);
 
@@ -288,7 +310,7 @@ export const InputHub: React.FC<InputHubProps> = ({
       return;
     }
 
-    handleProcessInput(url, 'url');
+    handleProcessInput(url, 'url', undefined, approvedProxy);
   };
 
   // Direct paste button from system clipboard - supports raw Markdown & rich clipboard
@@ -393,6 +415,12 @@ export const InputHub: React.FC<InputHubProps> = ({
                 if (lastAttemptedFile) handleFileSelect(lastAttemptedFile);
                 else if (lastAttemptedUrl) handleImportUrl(lastAttemptedUrl);
                 else handleStartReading();
+              }}
+              onApproveProxy={(proxyId) => {
+                const target = importState.sourceUrl || lastAttemptedUrl;
+                if (target) {
+                  handleImportUrl(target, undefined, proxyId);
+                }
               }}
               onPasteFallback={() => {
                 setImportState({ stage: 'idle' });

@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import { X, Sparkles } from 'lucide-react';
 import { ReaderSettings, SavedDocument, ReaderDocument } from '../types';
 import { THEME_CONFIGS, HIGHLIGHT_COLORS } from '../utils/themeStyles';
 import { InputHub } from './InputHub/InputHub';
+import { useDialogFocusTrap } from '../hooks/useDialogFocusTrap';
 
 interface TextInputModalProps {
   isOpen: boolean;
@@ -34,6 +35,14 @@ export const TextInputModal: React.FC<TextInputModalProps> = ({
   initialDroppedFile,
   onClearDroppedFile,
 }) => {
+  const modalRef = useRef<HTMLDivElement>(null);
+
+  useDialogFocusTrap({
+    isOpen,
+    containerRef: modalRef,
+    onClose,
+  });
+
   if (!isOpen) return null;
 
   const theme = THEME_CONFIGS[settings.theme] || THEME_CONFIGS.midnight;
@@ -50,9 +59,20 @@ export const TextInputModal: React.FC<TextInputModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
-      <div 
-        className={`w-full max-w-2xl rounded-2xl border ${theme.borderClass} ${theme.cardBgClass} shadow-2xl flex flex-col max-h-[92vh] overflow-hidden`}
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        id="text-input-modal"
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="text-input-modal-title"
+        tabIndex={-1}
+        className={`w-full max-w-2xl rounded-2xl border ${theme.borderClass} ${theme.cardBgClass} shadow-2xl flex flex-col max-h-[92vh] overflow-hidden focus:outline-none`}
       >
         {/* Modal Header */}
         <div className={`flex items-center justify-between px-5 sm:px-6 py-3.5 border-b ${theme.borderClass}`}>
@@ -61,7 +81,7 @@ export const TextInputModal: React.FC<TextInputModalProps> = ({
               <Sparkles className="w-5 h-5" />
             </div>
             <div>
-              <h3 className={`text-base sm:text-lg font-bold ${theme.textPrimary} flex items-center gap-2`}>
+              <h3 id="text-input-modal-title" className={`text-base sm:text-lg font-bold ${theme.textPrimary} flex items-center gap-2`}>
                 <span>Universal Text Input Hub</span>
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 font-mono hidden sm:inline-block">
                   TXT · MD · PDF · URL

@@ -475,6 +475,7 @@ export interface ImportState {
   errorAction?: 'retry' | 'paste' | 'another_file';
   detectedType?: InputSourceType;
   sourceUrl?: string;
+  requiresProxyConsent?: boolean;
   document?: ReaderDocument;
 }
 

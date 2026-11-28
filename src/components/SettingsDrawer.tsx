@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { useDialogFocusTrap, isTopmostDialog } from '../hooks/useDialogFocusTrap';
 import {
   X,
   Search,
@@ -347,10 +348,18 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
 
   const drawerRef = useRef<HTMLElement>(null);
 
+  useDialogFocusTrap({
+    isOpen,
+    containerRef: drawerRef,
+    onClose,
+  });
+
   useEffect(() => {
     if (!isOpen) return;
 
     const handlePointerDown = (event: MouseEvent | TouchEvent) => {
+      if (!isTopmostDialog(drawerRef.current)) return;
+
       const target = event.target as HTMLElement;
       if (target?.closest?.('#open-settings-btn')) return;
 
@@ -1925,11 +1934,15 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
       <aside
         id="settings-drawer"
         ref={drawerRef}
-        className={`fixed inset-y-0 right-0 z-50 w-full sm:w-[480px] md:w-[520px] max-w-[95vw] flex flex-col ${theme.cardBgClass} border-l ${theme.borderClass} shadow-2xl transition-all duration-200 ease-out ${
+        role="dialog"
+        aria-modal={isOpen ? true : undefined}
+        aria-labelledby="settings-drawer-title"
+        aria-hidden={!isOpen}
+        inert={!isOpen}
+        tabIndex={-1}
+        className={`fixed inset-y-0 right-0 z-50 w-full sm:w-[480px] md:w-[520px] max-w-[95vw] flex flex-col ${theme.cardBgClass} border-l ${theme.borderClass} shadow-2xl transition-all duration-200 ease-out focus:outline-none ${
           isOpen ? 'translate-x-0 opacity-100 pointer-events-auto' : 'translate-x-full opacity-0 pointer-events-none'
         }`}
-        aria-label="Settings Sidebar"
-        aria-hidden={!isOpen}
       >
         {/* Sticky Header */}
         <div className={`flex items-center justify-between px-6 py-4 border-b ${theme.borderClass} shrink-0`}>
@@ -1938,7 +1951,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
               <Sliders className="w-4 h-4" />
             </div>
             <div>
-              <h3 className={`text-base font-bold ${theme.textPrimary}`}>Reading Settings</h3>
+              <h3 id="settings-drawer-title" className={`text-base font-bold ${theme.textPrimary}`}>Reading Settings</h3>
               <p className={`text-xs ${theme.textMuted}`}>
                 Tune appearance, focus guides, pacing, and audio
               </p>

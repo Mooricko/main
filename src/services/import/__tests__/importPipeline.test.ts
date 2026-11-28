@@ -13,7 +13,14 @@ import { normalizeText, detectTextDirection, countWords, extractSuggestedTitle }
 import { detectInputType, isUrlString, isMarkdownString, getFileExtension } from '../detectInput';
 import { markdownToReadableText, extractMarkdown, cleanMarkdownContent } from '../extractMarkdown';
 import { extractTxt } from '../extractTxt';
-import { parseHtmlArticle, formatValidUrl, fetchUrlPreview, isWikipediaUrl } from '../extractUrl';
+import {
+  parseHtmlArticle,
+  formatValidUrl,
+  fetchUrlPreview,
+  extractUrl,
+  isWikipediaUrl,
+  isThirdPartyProxyConsentError,
+} from '../extractUrl';
 import { extractClipboardContent, processUniversalInput } from '../extractText';
 import { resolvePdfWorkerSrc, PDF_WORKER_FILENAME, extractPdf } from '../extractPdf';
 
@@ -440,6 +447,84 @@ startxref
         String(e.message).includes('valid PDF'),
         'Rejects invalid PDF magic header with clear error'
       );
+    }
+  }
+
+  // 11. THIRD-PARTY PROXY CONSENT ENFORCEMENT (NO SILENT FALLBACKS)
+  console.log('\n--- 11. Third-Party Proxy Consent Enforcement ---');
+  {
+    const originalFetch = global.fetch;
+    const calledUrls: string[] = [];
+
+    (global as any).fetch = async (input: any) => {
+      const target = String(input);
+      calledUrls.push(target);
+      return {
+        ok: false,
+        status: 422,
+        json: async () => ({
+          success: false,
+          code: 'DIRECT_FETCH_FAILED',
+          error: "Couldn't fetch this page directly.",
+        }),
+        text: async () => '',
+      } as any;
+    };
+
+    try {
+      let caughtErr: unknown = null;
+      try {
+        await extractUrl('https://private-example.org/draft?token=secret123');
+      } catch (e) {
+        caughtErr = e;
+      }
+
+      assert(
+        isThirdPartyProxyConsentError(caughtErr),
+        'Throws ThirdPartyProxyConsentRequiredError when direct fetch fails instead of silently proxying'
+      );
+      assert(
+        !calledUrls.some((u) => u.includes('allorigins.win')),
+        'Never contacts api.allorigins.win without explicit user consent'
+      );
+      assert(
+        !calledUrls.some((u) => u.includes('corsproxy.io')),
+        'Never contacts corsproxy.io without explicit user consent'
+      );
+      assert(
+        !calledUrls.some((u) => u.includes('r.jina.ai')),
+        'Never contacts r.jina.ai without explicit user consent'
+      );
+
+      // Explicit approval for allorigins contacts ONLY api.allorigins.win
+      const approvedCalls: string[] = [];
+      (global as any).fetch = async (input: any) => {
+        const target = String(input);
+        approvedCalls.push(target);
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            contents:
+              '<html><head><title>Approved Proxy Article</title></head><body><article><p>This article was loaded only after explicit user consent to use AllOrigins proxy for public reading.</p></article></body></html>',
+          }),
+          text: async () => '',
+        } as any;
+      };
+
+      const doc = await extractUrl(
+        'https://example.org/public-article',
+        undefined,
+        undefined,
+        { approvedProxy: 'allorigins' }
+      );
+      assert(doc.title === 'Approved Proxy Article', 'Loads article when user explicitly approves allorigins');
+      assert(
+        approvedCalls.length === 1 && approvedCalls[0].startsWith('https://api.allorigins.win/get?url='),
+        'Contacts only the single user-approved third-party proxy'
+      );
+    } finally {
+      global.fetch = originalFetch;
     }
   }
 
