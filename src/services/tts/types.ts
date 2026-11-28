@@ -105,12 +105,25 @@ export interface TinyAvaCacheInfo {
   modelName: string;
   sizeBytes: number;
   downloadProgress: number; // 0 to 100
+  loadedBytes?: number;
+  totalBytes?: number;
+  cachedVoices?: TinyAvaVoiceId[];
   statusDetail?: string;
   lastUpdated?: number;
   errorMessage?: string;
   errorCategory?: PiperErrorCategory;
   cacheVersion?: string;
   isOfflineReady: boolean;
+}
+
+export interface FarsiTtsStatusNotice {
+  id: number;
+  severity: 'info' | 'warning' | 'error';
+  message: string;
+  requestedEngine: FarsiTtsEngineType;
+  fallbackEngine?: FarsiTtsEngineType;
+  reason?: string;
+  timestamp: number;
 }
 
 export interface SynthesisResult {

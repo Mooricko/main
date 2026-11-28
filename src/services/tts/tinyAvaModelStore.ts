@@ -530,24 +530,35 @@ class TinyAvaModelStore {
     }
   }
   /**
-   * Updates cache UI subscribers when the MV3 offscreen document lazy-downloads
-   * tiny-ava model assets via Cache API on first Farsi playback.
+   * Updates cache UI subscribers when the web app or MV3 offscreen document
+   * lazy-downloads tiny-ava model assets via Cache API (`tiny-ava-models-v1`).
    */
   public reportExternalDownloadProgress(progress: {
     file: string;
     totalLoadedBytes: number;
+    totalExpectedBytes?: number;
     percent: number;
     cached?: boolean;
+    cachedVoices?: ('parisa' | 'mana' | 'maya')[];
   }): void {
     const pct = Math.max(0, Math.min(100, Math.round(progress.percent)));
+    const totalExpected = progress.totalExpectedBytes || progress.totalLoadedBytes;
+    const loadedMb = (progress.totalLoadedBytes / (1024 * 1024)).toFixed(1);
+    const totalMb = totalExpected > 0 ? (totalExpected / (1024 * 1024)).toFixed(1) : '29.0';
+
     if (pct >= 100) {
       this.currentStatus = 'ready';
       this.currentProgress = 100;
       this.statusDetail = undefined;
+      this.errorMessage = undefined;
+      this.errorCategory = undefined;
       this.notify({
         status: 'ready',
         modelName: TINY_AVA_MODEL_ID,
         sizeBytes: progress.totalLoadedBytes,
+        loadedBytes: progress.totalLoadedBytes,
+        totalBytes: totalExpected,
+        cachedVoices: progress.cachedVoices,
         downloadProgress: 100,
         lastUpdated: Date.now(),
         cacheVersion: TINY_AVA_CACHE_VERSION,
@@ -558,15 +569,41 @@ class TinyAvaModelStore {
 
     this.currentStatus = 'downloading';
     this.currentProgress = pct;
-    this.statusDetail = `Downloading ${progress.file} (${pct}%)...`;
+    this.statusDetail = `Downloading ${progress.file} (${loadedMb} / ${totalMb} MB · ${pct}%)`;
     this.notify({
       status: 'downloading',
       modelName: TINY_AVA_MODEL_ID,
       sizeBytes: progress.totalLoadedBytes,
+      loadedBytes: progress.totalLoadedBytes,
+      totalBytes: totalExpected,
+      cachedVoices: progress.cachedVoices,
       downloadProgress: pct,
       statusDetail: this.statusDetail,
       cacheVersion: TINY_AVA_CACHE_VERSION,
       isOfflineReady: false,
+    });
+  }
+
+  public reportExternalCacheState(info: Partial<TinyAvaCacheInfo> & { status: TinyAvaCacheInfo['status'] }): void {
+    this.currentStatus = info.status;
+    this.currentProgress = info.downloadProgress ?? (info.status === 'ready' ? 100 : 0);
+    this.statusDetail = info.statusDetail;
+    this.errorMessage = info.errorMessage;
+    this.errorCategory = info.errorCategory;
+    this.notify({
+      status: info.status,
+      modelName: info.modelName || TINY_AVA_MODEL_ID,
+      sizeBytes: info.sizeBytes ?? 0,
+      loadedBytes: info.loadedBytes,
+      totalBytes: info.totalBytes,
+      cachedVoices: info.cachedVoices,
+      downloadProgress: this.currentProgress,
+      statusDetail: this.statusDetail,
+      lastUpdated: info.lastUpdated,
+      errorMessage: this.errorMessage,
+      errorCategory: this.errorCategory,
+      cacheVersion: TINY_AVA_CACHE_VERSION,
+      isOfflineReady: info.isOfflineReady ?? info.status === 'ready',
     });
   }
 }

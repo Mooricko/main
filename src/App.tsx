@@ -73,6 +73,7 @@ import {
   restoreHistoryDocument,
   upsertHistoryDocument,
 } from './services/document/readingHistory';
+import { farsiOfflineTts } from './services/tts/farsiOfflineTTS';
 import { hasDragDataFromOutside, extractLinkFromDataTransfer } from './services/import/detectInput';
 import { extractClipboardContent } from './services/import/extractText';
 import {
@@ -540,6 +541,15 @@ export default function App() {
       }
     };
   }, []);
+
+  // Surface non-blocking Farsi TTS fallback notices (e.g. tiny-ava offline/WASM/OOM -> Piper/eSpeak)
+  useEffect(() => {
+    return farsiOfflineTts.subscribeStatusNotice((notice) => {
+      if (notice?.message) {
+        showToast(notice.message, { durationMs: 6000 });
+      }
+    });
+  }, [showToast]);
 
   // Warm-up Mode Session Tracking (Gradually increases speed over first 300 words)
   const [sessionWordsRead, setSessionWordsRead] = useState(0);

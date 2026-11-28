@@ -25,6 +25,7 @@ import {
   fetchAndCacheTinyAvaAsset,
   ensureTinyAvaModelsCached,
   getCachedTinyAvaAsset,
+  getTinyAvaCacheSummary,
   isTinyAvaCacheReady,
   clearTinyAvaModelCache,
 } from './tinyAvaModelCache';
@@ -61,6 +62,7 @@ if (typeof globalThis !== 'undefined') {
   g.fetchAndCacheTinyAvaAsset = fetchAndCacheTinyAvaAsset;
   g.ensureTinyAvaModelsCached = ensureTinyAvaModelsCached;
   g.getCachedTinyAvaAsset = getCachedTinyAvaAsset;
+  g.getTinyAvaCacheSummary = getTinyAvaCacheSummary;
   g.isTinyAvaCacheReady = isTinyAvaCacheReady;
   g.clearTinyAvaModelCache = clearTinyAvaModelCache;
   g.isFarsiTtsEngine = isFarsiTtsEngine;
@@ -94,6 +96,7 @@ export {
   fetchAndCacheTinyAvaAsset,
   ensureTinyAvaModelsCached,
   getCachedTinyAvaAsset,
+  getTinyAvaCacheSummary,
   isTinyAvaCacheReady,
   clearTinyAvaModelCache,
   isFarsiTtsEngine,

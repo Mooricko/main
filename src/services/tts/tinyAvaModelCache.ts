@@ -18,6 +18,8 @@
  * - lexicon_en.tsv        (~3.5 MB)
  */
 
+import type { TinyAvaVoiceId } from './types';
+
 export const TINY_AVA_CACHE_NAME = 'tiny-ava-models-v1';
 
 export type TinyAvaAssetKind = 'onnx' | 'json' | 'tsv';
@@ -54,7 +56,22 @@ export interface TinyAvaDownloadProgress {
   cached: boolean;
 }
 
+export interface TinyAvaCacheSummary {
+  /** True when G2P + Parisa ONNX/JSON (~29 MB) or v2 is cached */
+  isParisaReady: boolean;
+  /** True when G2P + tiny-ava-v2 ONNX/JSON + lexicon (Mana & Maya) are cached */
+  isMultiVoiceReady: boolean;
+  /** Voices ready offline */
+  cachedVoices: TinyAvaVoiceId[];
+  /** Logical filenames currently stored in Cache API */
+  cachedFiles: string[];
+  /** Total bytes currently cached across tiny-ava-models-v1 */
+  totalBytes: number;
+}
+
 export interface TinyAvaCacheOptions {
+  /** Target voice for voice-scoped lazy download ('parisa' downloads ~29 MB; 'mana'/'maya' downloads G2P + v2) */
+  voice?: TinyAvaVoiceId;
   /** Include unified tiny-ava-v2 (Parisa/Mana/Maya) + English lexicon alongside core Parisa assets */
   includeMultiVoice?: boolean;
   /** Additional voice ONNX/JSON files to download & cache when enabled */
@@ -69,7 +86,7 @@ export interface TinyAvaCacheOptions {
   fetchImpl?: typeof fetch;
 }
 
-export const TINY_AVA_CORE_ASSETS: readonly TinyAvaModelAsset[] = [
+export const TINY_AVA_G2P_ASSETS: readonly TinyAvaModelAsset[] = [
   {
     name: 'g2p_encoder.onnx',
     url: 'https://huggingface.co/spaces/mehdi-hf/tiny-ava-demo/resolve/main/assets/g2p/g2p_encoder.onnx',
@@ -84,20 +101,29 @@ export const TINY_AVA_CORE_ASSETS: readonly TinyAvaModelAsset[] = [
     expectedBytes: 5_305_604,
     minBytes: 100_000,
   },
+] as const;
+
+export const TINY_AVA_PARISA_ASSETS: readonly TinyAvaModelAsset[] = [
   {
     name: 'tiny-ava-parisa.onnx',
     url: 'https://huggingface.co/mehdi-hf/tiny-ava/resolve/main/onnx/tiny-ava-parisa.onnx',
     kind: 'onnx',
-    expectedBytes: 36_034_045,
+    expectedBytes: 21_361_734,
     minBytes: 100_000,
   },
   {
     name: 'tiny-ava-parisa.json',
     url: 'https://huggingface.co/mehdi-hf/tiny-ava/resolve/main/onnx/tiny-ava-parisa.json',
     kind: 'json',
-    expectedBytes: 1_146,
+    expectedBytes: 761,
     minBytes: 100,
   },
+] as const;
+
+/** Core Parisa bundle (~28.7 MB / ~29 MB total: G2P encoder + decoder + Parisa acoustic model) */
+export const TINY_AVA_CORE_ASSETS: readonly TinyAvaModelAsset[] = [
+  ...TINY_AVA_G2P_ASSETS,
+  ...TINY_AVA_PARISA_ASSETS,
 ] as const;
 
 export const TINY_AVA_MULTIVOICE_ASSETS: readonly TinyAvaModelAsset[] = [
@@ -123,6 +149,16 @@ export const TINY_AVA_MULTIVOICE_ASSETS: readonly TinyAvaModelAsset[] = [
     minBytes: 10_000,
   },
 ] as const;
+
+export const TINY_AVA_PARISA_TOTAL_BYTES = TINY_AVA_CORE_ASSETS.reduce(
+  (acc, asset) => acc + asset.expectedBytes,
+  0
+);
+
+export const TINY_AVA_MULTIVOICE_EXTRA_BYTES = TINY_AVA_MULTIVOICE_ASSETS.reduce(
+  (acc, asset) => acc + asset.expectedBytes,
+  0
+);
 
 function resolveCacheStorage(override?: CacheStorage): CacheStorage {
   const storage = override ?? (typeof caches !== 'undefined' ? caches : undefined);
@@ -161,14 +197,31 @@ function validateAssetBytes(asset: TinyAvaModelAsset, bytes: Uint8Array): void {
 
 /**
  * Returns the deduplicated list of tiny-ava model/metadata assets to cache.
+ * - If `voice` is specified:
+ *   - `'parisa'` returns ONLY G2P + Parisa (~29 MB).
+ *   - `'mana'` / `'maya'` returns G2P + tiny-ava-v2 + lexicon (lazy-downloading v2 without re-downloading Parisa).
+ * - If `voice` is omitted:
+ *   - Returns core Parisa assets, plus multi-voice assets when `includeMultiVoice` is true.
  */
 export function getTinyAvaAssetManifest(
-  options: Pick<TinyAvaCacheOptions, 'includeMultiVoice' | 'extraAssets'> = {}
+  options: Pick<TinyAvaCacheOptions, 'voice' | 'includeMultiVoice' | 'extraAssets'> = {}
 ): TinyAvaModelAsset[] {
-  const manifest: TinyAvaModelAsset[] = [...TINY_AVA_CORE_ASSETS];
-  if (options.includeMultiVoice) {
-    manifest.push(...TINY_AVA_MULTIVOICE_ASSETS);
+  const manifest: TinyAvaModelAsset[] = [];
+
+  if (options.voice === 'mana' || options.voice === 'maya') {
+    manifest.push(...TINY_AVA_G2P_ASSETS, ...TINY_AVA_MULTIVOICE_ASSETS);
+  } else if (options.voice === 'parisa') {
+    manifest.push(...TINY_AVA_CORE_ASSETS);
+    if (options.includeMultiVoice) {
+      manifest.push(...TINY_AVA_MULTIVOICE_ASSETS);
+    }
+  } else {
+    manifest.push(...TINY_AVA_CORE_ASSETS);
+    if (options.includeMultiVoice) {
+      manifest.push(...TINY_AVA_MULTIVOICE_ASSETS);
+    }
   }
+
   if (options.extraAssets?.length) {
     manifest.push(...options.extraAssets);
   }
@@ -361,7 +414,7 @@ export async function getCachedTinyAvaAsset(
  * Returns true if every asset in the requested manifest is currently cached in `tiny-ava-models-v1`.
  */
 export async function isTinyAvaCacheReady(
-  options: Pick<TinyAvaCacheOptions, 'includeMultiVoice' | 'extraAssets' | 'cacheStorage'> = {}
+  options: Pick<TinyAvaCacheOptions, 'voice' | 'includeMultiVoice' | 'extraAssets' | 'cacheStorage'> = {}
 ): Promise<boolean> {
   try {
     const storage = resolveCacheStorage(options.cacheStorage);
@@ -374,6 +427,78 @@ export async function isTinyAvaCacheReady(
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Inspects `tiny-ava-models-v1` and returns per-voice cache readiness and total cached bytes.
+ */
+export async function getTinyAvaCacheSummary(
+  cacheStorage?: CacheStorage
+): Promise<TinyAvaCacheSummary> {
+  const empty: TinyAvaCacheSummary = {
+    isParisaReady: false,
+    isMultiVoiceReady: false,
+    cachedVoices: [],
+    cachedFiles: [],
+    totalBytes: 0,
+  };
+  try {
+    const storage = resolveCacheStorage(cacheStorage);
+    const cache = await storage.open(TINY_AVA_CACHE_NAME);
+    const allKnown: TinyAvaModelAsset[] = [
+      ...TINY_AVA_G2P_ASSETS,
+      ...TINY_AVA_PARISA_ASSETS,
+      ...TINY_AVA_MULTIVOICE_ASSETS,
+    ];
+    const cachedSet = new Set<string>();
+    const cachedFiles: string[] = [];
+    let totalBytes = 0;
+
+    for (const asset of allKnown) {
+      const match = await cache.match(asset.url);
+      if (!match || !match.ok) continue;
+      let size = Number(match.headers.get('content-length')) || 0;
+      if (!size) {
+        try {
+          const buf = await match.clone().arrayBuffer();
+          size = buf.byteLength;
+        } catch {
+          size = asset.expectedBytes;
+        }
+      }
+      if (size >= asset.minBytes) {
+        cachedSet.add(asset.name);
+        cachedFiles.push(asset.name);
+        totalBytes += size;
+      }
+    }
+
+    const hasG2p =
+      cachedSet.has('g2p_encoder.onnx') && cachedSet.has('g2p_decoder.onnx');
+    const hasParisaOnly =
+      hasG2p &&
+      cachedSet.has('tiny-ava-parisa.onnx') &&
+      cachedSet.has('tiny-ava-parisa.json');
+    const isMultiVoiceReady =
+      hasG2p &&
+      cachedSet.has('tiny-ava-v2.onnx') &&
+      cachedSet.has('tiny-ava-v2.json');
+    const isParisaReady = hasParisaOnly || isMultiVoiceReady;
+
+    const cachedVoices: TinyAvaVoiceId[] = [];
+    if (isParisaReady) cachedVoices.push('parisa');
+    if (isMultiVoiceReady) cachedVoices.push('mana', 'maya');
+
+    return {
+      isParisaReady,
+      isMultiVoiceReady,
+      cachedVoices,
+      cachedFiles,
+      totalBytes,
+    };
+  } catch {
+    return empty;
   }
 }
 

@@ -147,6 +147,11 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
     const unsubTinyAva = farsiOfflineTts.subscribeTinyAvaCache((info) => {
       setTinyAvaCache(info);
     });
+    const unsubStatusNotice = farsiOfflineTts.subscribeStatusNotice((notice) => {
+      if (notice?.message) {
+        setFarsiTtsNotice(notice.message);
+      }
+    });
 
     loadCustomTtsConfig('english').then((cfg) => {
       if (cfg) {
@@ -165,11 +170,14 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
     return () => {
       unsubPiper();
       unsubTinyAva();
+      unsubStatusNotice();
     };
   }, []);
 
   const currentFarsiEngine = settings.farsiTtsEngine || farsiOfflineTts.getActiveEngine();
   const currentTinyAvaVoice: TinyAvaVoiceId = settings.tinyAvaVoice || farsiOfflineTts.getTinyAvaVoice();
+  const cachedTinyAvaVoices = tinyAvaCache.cachedVoices || (tinyAvaCache.isOfflineReady ? ['parisa'] : []);
+  const isSelectedTinyAvaVoiceCached = cachedTinyAvaVoices.includes(currentTinyAvaVoice);
 
   // English Custom Endpoint Handlers
   const handleSaveEnglishCustomConfig = async () => {
@@ -245,9 +253,11 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
       speechVoiceURI: voiceURI,
       ...(engine === 'tiny-ava' ? { tinyAvaVoice: currentTinyAvaVoice } : {}),
     });
-    if (engine === 'tiny-ava' && !tinyAvaCache.isOfflineReady) {
+    if (engine === 'tiny-ava' && !isSelectedTinyAvaVoiceCached) {
       setFarsiTtsNotice(
-        'tiny-ava v2 model bundle not yet cached. Download (~46MB) for offline Parisa/Mana/Maya voices, or eSpeak NG fallback will be used.'
+        currentTinyAvaVoice === 'parisa'
+          ? 'tiny-ava (Parisa) not yet cached (~29 MB one-time download for G2P + Parisa). Playback will lazy-download or fall back to Piper / eSpeak NG.'
+          : `tiny-ava (${currentTinyAvaVoice}) voice ONNX not yet cached (~38 MB). Download or play to lazy-fetch, or Piper / eSpeak NG fallback will be used.`
       );
     } else if (engine === 'piper' && !piperCache.isOfflineReady) {
       setFarsiTtsNotice(
@@ -260,13 +270,29 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
     }
   };
 
-  const handleSelectTinyAvaVoice = (voice: TinyAvaVoiceId) => {
+  const handleSelectTinyAvaVoice = async (voice: TinyAvaVoiceId) => {
     farsiOfflineTts.setTinyAvaVoice(voice);
     onUpdateSettings({
       farsiTtsEngine: 'tiny-ava',
       tinyAvaVoice: voice,
-      speechVoiceURI: 'farsi-tiny-ava',
+      speechVoiceURI: `farsi-tiny-ava-${voice}`,
     });
+
+    // Lazy-download the selected voice's ONNX model on demand if core tiny-ava is already cached
+    // and this voice is not yet in cache.
+    const voiceAlreadyCached = cachedTinyAvaVoices.includes(voice);
+    if (!voiceAlreadyCached && tinyAvaCache.isOfflineReady && tinyAvaCache.status !== 'downloading') {
+      setFarsiTtsNotice(
+        `Downloading ${voice} voice ONNX model on demand...`
+      );
+      const ok = await farsiOfflineTts.downloadTinyAvaModel(undefined, voice);
+      if (ok) {
+        setFarsiTtsNotice(`tiny-ava (${voice}) cached and ready offline.`);
+        setTimeout(() => setFarsiTtsNotice(null), 4000);
+      } else {
+        setFarsiTtsNotice(`Could not download ${voice} voice model. Falling back to Piper / eSpeak NG if unavailable.`);
+      }
+    }
   };
 
   const handleSaveFarsiCustomConfig = async () => {
@@ -343,20 +369,22 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
     setTimeout(() => setFarsiTtsNotice(null), 3000);
   };
 
-  const handleDownloadTinyAva = async () => {
-    setFarsiTtsNotice('Downloading tiny-ava v2 bundle (G2P + acoustic model + lexicon) to IndexedDB...');
-    const success = await farsiOfflineTts.downloadTinyAvaModel();
+  const handleDownloadTinyAva = async (voiceOverride?: TinyAvaVoiceId) => {
+    const targetVoice = voiceOverride || currentTinyAvaVoice;
+    const sizeLabel = targetVoice === 'parisa' ? '~29 MB' : '~38 MB';
+    setFarsiTtsNotice(`Downloading tiny-ava (${targetVoice}, ${sizeLabel}) to offline model cache...`);
+    const success = await farsiOfflineTts.downloadTinyAvaModel(undefined, targetVoice);
     if (success) {
-      setFarsiTtsNotice('tiny-ava v2 cached in IndexedDB and ready 100% offline (Parisa, Mana & Maya).');
+      setFarsiTtsNotice(`tiny-ava (${targetVoice}) cached and ready 100% offline.`);
       setTimeout(() => setFarsiTtsNotice(null), 5000);
     } else {
-      setFarsiTtsNotice('tiny-ava download failed. Fallback to eSpeak NG WASM remains active.');
+      setFarsiTtsNotice('tiny-ava download failed. Graceful fallback to Piper / eSpeak NG remains active.');
     }
   };
 
   const handleClearTinyAvaCache = async () => {
     await farsiOfflineTts.clearTinyAvaCache();
-    setFarsiTtsNotice('tiny-ava offline cache cleared.');
+    setFarsiTtsNotice('Cached tiny-ava models cleared.');
     setTimeout(() => setFarsiTtsNotice(null), 3000);
   };
 
@@ -1657,14 +1685,14 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                             <div className="flex items-center justify-between gap-1 mb-1">
                               <span className={`text-xs font-semibold ${theme.textPrimary} flex items-center gap-1 truncate`}>
                                 <Sparkles className="w-3.5 h-3.5 text-rose-500 shrink-0" />
-                                <span className="truncate">tiny-ava v2</span>
+                                <span className="truncate">tiny-ava</span>
                               </span>
                               {currentFarsiEngine === 'tiny-ava' && (
                                 <CheckCircle2 className="w-3.5 h-3.5 text-red-500 shrink-0" />
                               )}
                             </div>
                             <p className={`text-[10px] ${theme.textMuted} leading-tight`}>
-                              پریسا / مانا / مایا (~46MB)
+                              پریسا / مانا / مایا (~29MB)
                             </p>
                           </button>
 
@@ -1842,59 +1870,69 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                           </div>
                         )}
 
-                        {/* tiny-ava v2 Voice Selection & Offline Cache */}
+                        {/* tiny-ava Voice Selection & Offline Cache */}
                         {currentFarsiEngine === 'tiny-ava' && (
                           <div className={`pt-3 border-t ${theme.borderClass} space-y-3`}>
                             <div className="space-y-1.5">
                               <div className="flex items-center justify-between text-xs">
                                 <span className={`font-semibold ${theme.textPrimary}`}>
-                                  گوینده tiny-ava v2 (Voice)
+                                  گوینده tiny-ava (Voice)
                                 </span>
                                 <span className={`text-[10px] font-mono ${theme.textMuted}`}>24 kHz ONNX</span>
                               </div>
                               <div className="grid grid-cols-3 gap-1.5">
                                 {([
-                                  { id: 'parisa' as const, label: 'Parisa', sub: 'پریسا (پیش‌فرض)' },
-                                  { id: 'mana' as const, label: 'Mana', sub: 'مانا (استودیویی)' },
-                                  { id: 'maya' as const, label: 'Maya', sub: 'مایا (دوزبانه EN)' },
-                                ]).map((v) => (
-                                  <button
-                                    key={v.id}
-                                    type="button"
-                                    onClick={() => handleSelectTinyAvaVoice(v.id)}
-                                    className={`px-2 py-2 rounded-lg border text-center transition-all cursor-pointer ${
-                                      currentTinyAvaVoice === v.id
-                                        ? 'border-red-500 bg-red-500/10 text-red-400'
-                                        : `${theme.borderClass} ${theme.inputBg} ${theme.textMuted} hover:border-slate-500/40`
-                                    }`}
-                                  >
-                                    <div className={`text-xs font-semibold ${currentTinyAvaVoice === v.id ? 'text-red-400' : theme.textPrimary}`}>
-                                      {v.label}
-                                    </div>
-                                    <div className={`text-[10px] ${theme.textMuted} truncate`}>{v.sub}</div>
-                                  </button>
-                                ))}
+                                  { id: 'parisa' as const, label: 'Parisa', sub: 'پریسا (~29MB)' },
+                                  { id: 'mana' as const, label: 'Mana', sub: 'مانا (دانلود در انتخاب)' },
+                                  { id: 'maya' as const, label: 'Maya', sub: 'مایا EN (دانلود در انتخاب)' },
+                                ]).map((v) => {
+                                  const isCached = cachedTinyAvaVoices.includes(v.id);
+                                  return (
+                                    <button
+                                      key={v.id}
+                                      type="button"
+                                      onClick={() => handleSelectTinyAvaVoice(v.id)}
+                                      className={`px-2 py-2 rounded-lg border text-center transition-all cursor-pointer ${
+                                        currentTinyAvaVoice === v.id
+                                          ? 'border-red-500 bg-red-500/10 text-red-400'
+                                          : `${theme.borderClass} ${theme.inputBg} ${theme.textMuted} hover:border-slate-500/40`
+                                      }`}
+                                    >
+                                      <div className={`text-xs font-semibold flex items-center justify-center gap-1 ${currentTinyAvaVoice === v.id ? 'text-red-400' : theme.textPrimary}`}>
+                                        <span>{v.label}</span>
+                                        {isCached && <Check className="w-3 h-3 text-emerald-500 shrink-0" />}
+                                      </div>
+                                      <div className={`text-[10px] ${theme.textMuted} truncate`}>
+                                        {isCached ? 'آماده آفلاین' : v.sub}
+                                      </div>
+                                    </button>
+                                  );
+                                })}
                               </div>
                             </div>
 
                             <div className="flex items-center justify-between gap-2 text-xs flex-wrap">
                               <span className={`font-semibold ${theme.textPrimary} flex items-center gap-1.5`}>
                                 <Layers className="w-3.5 h-3.5 text-rose-400" />
-                                وضعیت بسته آفلاین tiny-ava v2
+                                وضعیت کش مدل tiny-ava
                               </span>
 
-                              {tinyAvaCache.isOfflineReady ? (
-                                <span className="text-[11px] font-medium text-emerald-500">
-                                  ذخیره در IndexedDB (آماده آفلاین)
-                                </span>
-                              ) : tinyAvaCache.status === 'downloading' ? (
+                              {tinyAvaCache.status === 'downloading' ? (
                                 <span className="flex items-center gap-1 text-[11px] font-mono tabular-nums font-medium text-amber-500">
                                   <Activity className="w-3 h-3 animate-spin" />
-                                  دانلود: {tinyAvaCache.downloadProgress}%
+                                  {tinyAvaCache.loadedBytes && tinyAvaCache.totalBytes
+                                    ? `${(tinyAvaCache.loadedBytes / (1024 * 1024)).toFixed(1)} / ${(tinyAvaCache.totalBytes / (1024 * 1024)).toFixed(1)} MB (${tinyAvaCache.downloadProgress}%)`
+                                    : `${tinyAvaCache.downloadProgress}%`}
+                                </span>
+                              ) : isSelectedTinyAvaVoiceCached ? (
+                                <span className="text-[11px] font-medium text-emerald-500">
+                                  ذخیره آفلاین ({(tinyAvaCache.sizeBytes / (1024 * 1024)).toFixed(1)} MB)
                                 </span>
                               ) : (
                                 <span className={`text-[11px] ${theme.textMuted}`}>
-                                  دانلود نشده (فال‌بک فعال)
+                                  {currentTinyAvaVoice === 'parisa'
+                                    ? 'دانلود یک‌باره (~29 MB برای G2P + Parisa)'
+                                    : `دانلود در صورت انتخاب (${currentTinyAvaVoice} · ~38 MB)`}
                                 </span>
                               )}
                             </div>
@@ -1908,42 +1946,44 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                                   />
                                 </div>
                                 {tinyAvaCache.statusDetail && (
-                                  <div className={`text-[10px] ${theme.textMuted}`}>{tinyAvaCache.statusDetail}</div>
+                                  <div className={`text-[10px] font-mono ${theme.textMuted}`}>{tinyAvaCache.statusDetail}</div>
                                 )}
                               </div>
                             )}
 
                             <div className="flex items-center justify-between gap-2 flex-wrap">
-                              {!tinyAvaCache.isOfflineReady ? (
-                                <button
-                                  type="button"
-                                  onClick={handleDownloadTinyAva}
-                                  disabled={tinyAvaCache.status === 'downloading'}
-                                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs font-semibold transition-colors disabled:opacity-50 cursor-pointer"
-                                >
-                                  <Download className="w-3.5 h-3.5" />
-                                  <span>
-                                    {tinyAvaCache.status === 'downloading'
-                                      ? 'در حال دانلود...'
-                                      : 'دانلود و ذخیره آفلاین (~46MB)'}
-                                  </span>
-                                </button>
-                              ) : (
-                                <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                {!isSelectedTinyAvaVoiceCached && (
                                   <button
                                     type="button"
+                                    onClick={() => handleDownloadTinyAva(currentTinyAvaVoice)}
+                                    disabled={tinyAvaCache.status === 'downloading'}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs font-semibold transition-colors disabled:opacity-50 cursor-pointer"
+                                  >
+                                    <Download className="w-3.5 h-3.5" />
+                                    <span>
+                                      {tinyAvaCache.status === 'downloading'
+                                        ? `Downloading (${tinyAvaCache.downloadProgress}%)...`
+                                        : currentTinyAvaVoice === 'parisa'
+                                          ? 'دانلود G2P + Parisa (~29 MB)'
+                                          : `دانلود صدای ${currentTinyAvaVoice} (~38 MB)`}
+                                    </span>
+                                  </button>
+                                )}
+
+                                {tinyAvaCache.isOfflineReady && (
+                                  <button
+                                    id="clear-tiny-ava-cache-btn"
+                                    type="button"
                                     onClick={handleClearTinyAvaCache}
-                                    className={`flex items-center gap-1 px-2.5 py-1 rounded-lg border ${theme.borderClass} text-xs ${theme.textMuted} hover:text-red-500 transition-colors cursor-pointer`}
-                                    title="حذف مدل tiny-ava از حافظه محلی"
+                                    className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg border ${theme.borderClass} text-xs ${theme.textMuted} hover:text-red-500 transition-colors cursor-pointer`}
+                                    title="حذف مدل‌های کش‌شده tiny-ava از حافظه مرورگر"
                                   >
                                     <Trash2 className="w-3 h-3" />
-                                    <span>پاک‌کردن کش</span>
+                                    <span>Clear cached models</span>
                                   </button>
-                                  <span className={`text-[11px] font-mono tabular-nums ${theme.textMuted}`}>
-                                    {(tinyAvaCache.sizeBytes / (1024 * 1024)).toFixed(1)} MB
-                                  </span>
-                                </div>
-                              )}
+                                )}
+                              </div>
 
                               <button
                                 type="button"
@@ -1957,7 +1997,16 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                             </div>
 
                             <p className={`text-[10px] ${theme.textMuted} leading-relaxed`}>
-                              Powered by tiny-ava (Mehdi Allahyari / OncillaAI) · Model weights CC BY 4.0
+                              Powered by{' '}
+                              <a
+                                href="https://huggingface.co/mehdi-hf/tiny-ava"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="underline hover:text-red-400 transition-colors"
+                              >
+                                tiny-ava (Mehdi Allahyari / OncillaAI)
+                              </a>{' '}
+                              · CC BY 4.0
                             </p>
                           </div>
                         )}
@@ -2042,9 +2091,26 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                         )}
 
                         {farsiTtsNotice && (
-                          <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-500 text-xs leading-relaxed flex items-start gap-1.5">
-                            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                            <span>{farsiTtsNotice}</span>
+                          <div
+                            role="status"
+                            aria-live="polite"
+                            className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-500 text-xs leading-relaxed flex items-start justify-between gap-2"
+                          >
+                            <div className="flex items-start gap-1.5">
+                              <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                              <span>{farsiTtsNotice}</span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setFarsiTtsNotice(null);
+                                farsiOfflineTts.clearStatusNotice();
+                              }}
+                              aria-label="Dismiss status notice"
+                              className="text-amber-500/70 hover:text-amber-400 shrink-0 cursor-pointer"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
                           </div>
                         )}
 
@@ -2316,26 +2382,42 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
           )}
         </div>
 
-        {/* Sticky Footer with Reset Defaults */}
-        <div className={`flex items-center justify-between px-6 py-4 border-t ${theme.borderClass} ${theme.accentSurface} shrink-0`}>
-          <button
-            id="reset-settings-defaults-btn"
-            type="button"
-            onClick={onResetDefaults}
-            className={`flex items-center gap-1.5 text-xs font-medium ${theme.textMuted} hover:${theme.textPrimary} transition-colors cursor-pointer`}
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-            <span>Reset Defaults</span>
-          </button>
+        {/* About / CC BY 4.0 Attribution & Sticky Footer */}
+        <div className={`border-t ${theme.borderClass} ${theme.accentSurface} shrink-0`}>
+          <div className={`px-6 pt-2.5 pb-1 text-[10px] ${theme.textMuted} flex items-center justify-between gap-2 flex-wrap`}>
+            <span>
+              Powered by{' '}
+              <a
+                href="https://huggingface.co/mehdi-hf/tiny-ava"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline hover:text-red-400 transition-colors"
+              >
+                tiny-ava (Mehdi Allahyari / OncillaAI)
+              </a>{' '}
+              (CC BY 4.0)
+            </span>
+          </div>
+          <div className="flex items-center justify-between px-6 py-3">
+            <button
+              id="reset-settings-defaults-btn"
+              type="button"
+              onClick={onResetDefaults}
+              className={`flex items-center gap-1.5 text-xs font-medium ${theme.textMuted} hover:${theme.textPrimary} transition-colors cursor-pointer`}
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Reset Defaults</span>
+            </button>
 
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-5 py-2 rounded-xl text-white font-semibold text-xs transition-transform active:scale-95 shadow-sm cursor-pointer"
-            style={{ backgroundColor: highlight.hex }}
-          >
-            Done
-          </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-5 py-2 rounded-xl text-white font-semibold text-xs transition-transform active:scale-95 shadow-sm cursor-pointer"
+              style={{ backgroundColor: highlight.hex }}
+            >
+              Done
+            </button>
+          </div>
         </div>
       </aside>
     </>

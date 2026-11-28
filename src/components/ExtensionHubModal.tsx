@@ -104,15 +104,26 @@ export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
   useEffect(() => {
     setActiveEngine(farsiOfflineTts.getActiveEngine());
     setTinyAvaVoice(farsiOfflineTts.getTinyAvaVoice());
+    const unsubManager = farsiOfflineTts.subscribe(() => {
+      setActiveEngine(farsiOfflineTts.getActiveEngine());
+      setTinyAvaVoice(farsiOfflineTts.getTinyAvaVoice());
+    });
     const unsubPiper = farsiOfflineTts.subscribePiperCache((info) => {
       setPiperCache(info);
     });
     const unsubTinyAva = farsiOfflineTts.subscribeTinyAvaCache((info) => {
       setTinyAvaCache(info);
     });
+    const unsubNotice = farsiOfflineTts.subscribeStatusNotice((notice) => {
+      if (notice?.message) {
+        setFarsiFeedback(notice.message);
+      }
+    });
     return () => {
+      unsubManager();
       unsubPiper();
       unsubTinyAva();
+      unsubNotice();
     };
   }, []);
 
@@ -797,7 +808,7 @@ export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
                   </div>
                 </div>
 
-                {/* Engine 3: tiny-ava v2 */}
+                {/* Engine 3: tiny-ava */}
                 <div 
                   onClick={() => {
                     setActiveEngine('tiny-ava');
@@ -812,23 +823,23 @@ export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-sm font-bold text-white flex items-center gap-2">
                       <Sparkles className="w-4 h-4 text-rose-400" />
-                      tiny-ava v2
+                      tiny-ava
                     </span>
                     {activeEngine === 'tiny-ava' && <CheckCircle2 className="w-4 h-4 text-red-500" />}
                   </div>
                   <ul className="text-xs text-slate-400 space-y-1 mb-3">
-                    <li>• ۳ صدا: پریسا، مانا، مایا (دوزبانه)</li>
+                    <li>• ۳ صدا: پریسا (~29MB)، مانا، مایا (دوزبانه)</li>
                     <li>• G2P بومی فارسی + خروجی 24kHz</li>
-                    <li>• ذخیره ۱۰۰٪ آفلاین در IndexedDB</li>
+                    <li>• ذخیره ۱۰۰٪ آفلاین در Cache API</li>
                   </ul>
                   <div className="flex items-center gap-2">
                     {tinyAvaCache.isOfflineReady ? (
                       <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">
-                        وضعیت: آماده آفلاین
+                        وضعیت: آماده آفلاین ({(tinyAvaCache.sizeBytes / (1024 * 1024)).toFixed(1)} MB)
                       </span>
                     ) : (
                       <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">
-                        نیاز به دانلود (~46MB)
+                        دانلود یک‌باره (~29MB)
                       </span>
                     )}
                   </div>
@@ -837,157 +848,263 @@ export const ExtensionHubModal: React.FC<ExtensionHubModalProps> = ({
 
               {/* Model Cache Management & Testing Console */}
               <div className="p-4 rounded-xl border border-white/10 bg-black/30 space-y-3">
-                {activeEngine === 'tiny-ava' && (
-                  <div className="flex items-center justify-between flex-wrap gap-2 pb-2 border-b border-white/5">
-                    <span className="text-xs font-semibold text-slate-200">گوینده tiny-ava v2:</span>
-                    <div className="flex items-center gap-1.5">
-                      {([
-                        { id: 'parisa' as const, label: 'Parisa (پریسا)' },
-                        { id: 'mana' as const, label: 'Mana (مانا)' },
-                        { id: 'maya' as const, label: 'Maya (مایا EN)' },
-                      ]).map((v) => (
-                        <button
-                          key={v.id}
-                          type="button"
-                          onClick={() => {
-                            setTinyAvaVoice(v.id);
-                            farsiOfflineTts.setTinyAvaVoice(v.id);
-                          }}
-                          className={`px-2.5 py-1 rounded-lg border text-xs font-medium transition-colors cursor-pointer ${
-                            tinyAvaVoice === v.id
-                              ? 'border-red-500 bg-red-500/15 text-red-300'
-                              : 'border-slate-700 bg-black/30 text-slate-400 hover:text-white'
-                          }`}
-                        >
-                          {v.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
+                {activeEngine === 'tiny-ava' && (() => {
+                  const cachedVoices = tinyAvaCache.cachedVoices || (tinyAvaCache.isOfflineReady ? ['parisa'] : []);
+                  const isVoiceCached = cachedVoices.includes(tinyAvaVoice);
+                  return (
+                    <>
+                      <div className="flex items-center justify-between flex-wrap gap-2 pb-2 border-b border-white/5">
+                        <span className="text-xs font-semibold text-slate-200">گوینده tiny-ava:</span>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {([
+                            { id: 'parisa' as const, label: 'Parisa (پریسا · ~29MB)' },
+                            { id: 'mana' as const, label: 'Mana (مانا)' },
+                            { id: 'maya' as const, label: 'Maya (مایا EN)' },
+                          ]).map((v) => {
+                            const vCached = cachedVoices.includes(v.id);
+                            return (
+                              <button
+                                key={v.id}
+                                type="button"
+                                onClick={async () => {
+                                  setTinyAvaVoice(v.id);
+                                  farsiOfflineTts.setTinyAvaVoice(v.id);
+                                  if (!vCached && tinyAvaCache.isOfflineReady && tinyAvaCache.status !== 'downloading') {
+                                    setFarsiFeedback(`در حال دانلود تنبل مدل صدای ${v.id}...`);
+                                    const ok = await farsiOfflineTts.downloadTinyAvaModel(undefined, v.id);
+                                    setFarsiFeedback(
+                                      ok
+                                        ? `✓ صدای ${v.id} با موفقیت دانلود و کش شد.`
+                                        : `⚠️ خطا در دانلود صدای ${v.id}. فال‌بک به Piper / eSpeak فعال است.`
+                                    );
+                                  }
+                                }}
+                                className={`px-2.5 py-1 rounded-lg border text-xs font-medium transition-colors cursor-pointer flex items-center gap-1 ${
+                                  tinyAvaVoice === v.id
+                                    ? 'border-red-500 bg-red-500/15 text-red-300'
+                                    : 'border-slate-700 bg-black/30 text-slate-400 hover:text-white'
+                                }`}
+                              >
+                                <span>{v.label}</span>
+                                {vCached && <Check className="w-3 h-3 text-emerald-400" />}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
 
-                <div className="flex items-center justify-between flex-wrap gap-2">
-                  <div className="space-y-0.5">
-                    <div className="text-xs font-bold text-slate-200">
-                      {activeEngine === 'tiny-ava'
-                        ? 'کنترل کش و دانلود مدل tiny-ava v2'
-                        : 'کنترل کش و دانلود مدل Piper Farsi'}
-                    </div>
-                    <div className="text-[11px] text-slate-400">
-                      پس از یک‌بار دانلود، مدل بدون نیاز به اینترنت در حافظه مرورگر باقی می‌ماند.
-                    </div>
-                  </div>
+                      {tinyAvaCache.status === 'downloading' && (
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between text-[11px] font-mono text-amber-400">
+                            <span className="flex items-center gap-1">
+                              <Activity className="w-3 h-3 animate-spin" />
+                              {tinyAvaCache.statusDetail || 'Downloading tiny-ava...'}
+                            </span>
+                            <span>{tinyAvaCache.downloadProgress}%</span>
+                          </div>
+                          <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+                            <div
+                              className="bg-red-500 h-full transition-all duration-300"
+                              style={{ width: `${tinyAvaCache.downloadProgress}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
 
-                  <div className="flex items-center gap-2">
-                    {activeEngine === 'tiny-ava' ? (
-                      !tinyAvaCache.isOfflineReady ? (
+                      <div className="flex items-center justify-between flex-wrap gap-2">
+                        <div className="space-y-0.5">
+                          <div className="text-xs font-bold text-slate-200">
+                            کنترل کش و دانلود مدل tiny-ava ({tinyAvaVoice})
+                          </div>
+                          <div className="text-[11px] text-slate-400">
+                            دانلود یک‌باره (~29 MB برای G2P + Parisa). صداهای Mana و Maya فقط در صورت انتخاب دانلود می‌شوند.
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {!isVoiceCached && (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const sizeLabel = tinyAvaVoice === 'parisa' ? '~29 MB' : '~38 MB';
+                                setFarsiFeedback(`در حال دانلود مدل tiny-ava (${tinyAvaVoice}, ${sizeLabel})...`);
+                                const ok = await farsiOfflineTts.downloadTinyAvaModel(undefined, tinyAvaVoice);
+                                if (ok) {
+                                  setFarsiFeedback(`✓ مدل tiny-ava (${tinyAvaVoice}) با موفقیت کش شد و آماده آفلاین است.`);
+                                } else {
+                                  setFarsiFeedback('⚠️ خطا در دانلود tiny-ava. فال‌بک به Piper / eSpeak فعال است.');
+                                }
+                              }}
+                              disabled={tinyAvaCache.status === 'downloading'}
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs font-bold transition-colors cursor-pointer disabled:opacity-50"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                              <span>
+                                {tinyAvaCache.status === 'downloading'
+                                  ? `Downloading (${tinyAvaCache.downloadProgress}%)`
+                                  : tinyAvaVoice === 'parisa'
+                                    ? 'دانلود G2P + Parisa (~29 MB)'
+                                    : `دانلود ${tinyAvaVoice} (~38 MB)`}
+                              </span>
+                            </button>
+                          )}
+
+                          {tinyAvaCache.isOfflineReady && (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                await farsiOfflineTts.clearTinyAvaCache();
+                                setFarsiFeedback('مدل‌های کش‌شده tiny-ava پاک شدند.');
+                              }}
+                              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-700 text-slate-300 hover:text-red-400 text-xs transition-colors cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>Clear cached models</span>
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              setIsFarsiTesting(true);
+                              try {
+                                await farsiOfflineTts.preview(
+                                  activeEngine,
+                                  ttsSpeed,
+                                  ttsPitch,
+                                  1.0,
+                                  (reason) => {
+                                    setFarsiFeedback(reason);
+                                  },
+                                  undefined,
+                                  tinyAvaVoice
+                                );
+                              } catch (err: any) {
+                                setFarsiFeedback(err?.message || 'خطا در پخش');
+                              } finally {
+                                setTimeout(() => setIsFarsiTesting(false), 2800);
+                              }
+                            }}
+                            disabled={isFarsiTesting}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-500/40 bg-red-500/10 hover:bg-red-500/20 text-red-300 text-xs font-bold transition-colors cursor-pointer"
+                          >
+                            <Play className="w-3.5 h-3.5 fill-current" />
+                            <span>{isFarsiTesting ? 'در حال گفتار...' : 'تست گفتار آفلاین (تست صدا)'}</span>
+                          </button>
+                        </div>
+                      </div>
+                    </>
+                  );
+                })()}
+
+                {activeEngine !== 'tiny-ava' && (
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <div className="space-y-0.5">
+                      <div className="text-xs font-bold text-slate-200">
+                        کنترل کش و دانلود مدل Piper Farsi
+                      </div>
+                      <div className="text-[11px] text-slate-400">
+                        پس از یک‌بار دانلود، مدل بدون نیاز به اینترنت در حافظه مرورگر باقی می‌ماند.
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      {!piperCache.isOfflineReady ? (
                         <button
                           type="button"
                           onClick={async () => {
-                            setFarsiFeedback('در حال دانلود بسته آفلاین tiny-ava v2...');
-                            const ok = await farsiOfflineTts.downloadTinyAvaModel();
+                            setFarsiFeedback('در حال دانلود مدل هوش مصنوعی Piper...');
+                            const ok = await farsiOfflineTts.downloadPiperModel();
                             if (ok) {
-                              setFarsiFeedback('✓ بسته tiny-ava v2 با موفقیت دانلود و در IndexedDB ذخیره شد.');
+                              setFarsiFeedback('✓ مدل با موفقیت دانلود و در IndexedDB ذخیره شد.');
                             } else {
-                              setFarsiFeedback('⚠️ خطا در دانلود tiny-ava v2. فال‌بک به eSpeak فعال است.');
+                              setFarsiFeedback('⚠️ خطا در دانلود مدل. فال‌بک به eSpeak فعال است.');
                             }
                           }}
-                          disabled={tinyAvaCache.status === 'downloading'}
+                          disabled={piperCache.status === 'downloading'}
                           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs font-bold transition-colors cursor-pointer disabled:opacity-50"
                         >
                           <Download className="w-3.5 h-3.5" />
-                          <span>
-                            {tinyAvaCache.status === 'downloading'
-                              ? `دانلود (${tinyAvaCache.downloadProgress}%)`
-                              : 'دانلود tiny-ava (~46MB)'}
-                          </span>
+                          <span>{piperCache.status === 'downloading' ? `دانلود (${piperCache.downloadProgress}%)` : 'دانلود مدل (~25MB)'}</span>
                         </button>
                       ) : (
                         <button
                           type="button"
                           onClick={async () => {
-                            await farsiOfflineTts.clearTinyAvaCache();
-                            setFarsiFeedback('کش tiny-ava پاک شد.');
+                            await farsiOfflineTts.clearPiperCache();
+                            setFarsiFeedback('کش پاک شد.');
                           }}
                           className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-700 text-slate-400 hover:text-red-400 text-xs transition-colors cursor-pointer"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
-                          <span>پاک کردن کش tiny-ava</span>
+                          <span>پاک کردن کش مدل</span>
                         </button>
-                      )
-                    ) : !piperCache.isOfflineReady ? (
+                      )}
+
                       <button
                         type="button"
                         onClick={async () => {
-                          setFarsiFeedback('در حال دانلود مدل هوش مصنوعی Piper...');
-                          const ok = await farsiOfflineTts.downloadPiperModel();
-                          if (ok) {
-                            setFarsiFeedback('✓ مدل با موفقیت دانلود و در IndexedDB ذخیره شد.');
-                          } else {
-                            setFarsiFeedback('⚠️ خطا در دانلود مدل. فال‌بک به eSpeak فعال است.');
+                          setIsFarsiTesting(true);
+                          try {
+                            await farsiOfflineTts.preview(
+                              activeEngine,
+                              ttsSpeed,
+                              ttsPitch,
+                              1.0,
+                              (reason) => {
+                                setFarsiFeedback(reason);
+                              }
+                            );
+                          } catch (err: any) {
+                            setFarsiFeedback(err?.message || 'خطا در پخش');
+                          } finally {
+                            setTimeout(() => setIsFarsiTesting(false), 2800);
                           }
                         }}
-                        disabled={piperCache.status === 'downloading'}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs font-bold transition-colors cursor-pointer disabled:opacity-50"
+                        disabled={isFarsiTesting}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-500/40 bg-red-500/10 hover:bg-red-500/20 text-red-300 text-xs font-bold transition-colors cursor-pointer"
                       >
-                        <Download className="w-3.5 h-3.5" />
-                        <span>{piperCache.status === 'downloading' ? `دانلود (${piperCache.downloadProgress}%)` : 'دانلود مدل (~25MB)'}</span>
+                        <Play className="w-3.5 h-3.5 fill-current" />
+                        <span>{isFarsiTesting ? 'در حال گفتار...' : 'تست گفتار آفلاین (تست صدا)'}</span>
                       </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          await farsiOfflineTts.clearPiperCache();
-                          setFarsiFeedback('کش پاک شد.');
-                        }}
-                        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-700 text-slate-400 hover:text-red-400 text-xs transition-colors cursor-pointer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span>پاک کردن کش مدل</span>
-                      </button>
-                    )}
-
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        setIsFarsiTesting(true);
-                        try {
-                          await farsiOfflineTts.preview(
-                            activeEngine,
-                            ttsSpeed,
-                            ttsPitch,
-                            1.0,
-                            (reason) => {
-                              setFarsiFeedback(reason);
-                            },
-                            undefined,
-                            activeEngine === 'tiny-ava' ? tinyAvaVoice : undefined
-                          );
-                        } catch (err: any) {
-                          setFarsiFeedback(err?.message || 'خطا در پخش');
-                        } finally {
-                          setTimeout(() => setIsFarsiTesting(false), 2800);
-                        }
-                      }}
-                      disabled={isFarsiTesting}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-500/40 bg-red-500/10 hover:bg-red-500/20 text-red-300 text-xs font-bold transition-colors cursor-pointer"
-                    >
-                      <Play className="w-3.5 h-3.5 fill-current" />
-                      <span>{isFarsiTesting ? 'در حال گفتار...' : 'تست گفتار آفلاین (تست صدا)'}</span>
-                    </button>
+                    </div>
                   </div>
-                </div>
-
-                {activeEngine === 'tiny-ava' && (
-                  <p className="text-[10px] text-slate-500">
-                    Powered by tiny-ava (Mehdi Allahyari / OncillaAI) · Model weights CC BY 4.0
-                  </p>
                 )}
 
+                <p className="text-[11px] text-slate-400">
+                  Powered by{' '}
+                  <a
+                    href="https://huggingface.co/mehdi-hf/tiny-ava"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline text-slate-300 hover:text-red-400 transition-colors"
+                  >
+                    tiny-ava (Mehdi Allahyari / OncillaAI)
+                  </a>{' '}
+                  · CC BY 4.0
+                </p>
+
                 {farsiFeedback && (
-                  <div className="p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-300 text-xs flex items-center gap-2">
-                    <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
-                    <span>{farsiFeedback}</span>
+                  <div
+                    role="status"
+                    aria-live="polite"
+                    className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center justify-between gap-2"
+                  >
+                    <div className="flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                      <span>{farsiFeedback}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFarsiFeedback(null);
+                        farsiOfflineTts.clearStatusNotice();
+                      }}
+                      aria-label="Dismiss status notice"
+                      className="text-amber-300/70 hover:text-amber-200 shrink-0 cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
                   </div>
                 )}
 

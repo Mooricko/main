@@ -198,6 +198,33 @@ class SpeechNarrationService {
         isFarsi: true,
       },
       {
+        name: '✨ tiny-ava — پریسا (ONNX 24kHz آفلاین)',
+        lang: 'fa-IR',
+        voiceURI: 'farsi-tiny-ava-parisa',
+        default: false,
+        localService: true,
+        provider: 'tiny-ava (ONNX Web - 24kHz Offline Neural)',
+        isFarsi: true,
+      },
+      {
+        name: '✨ tiny-ava — مانا (ONNX 24kHz استودیویی)',
+        lang: 'fa-IR',
+        voiceURI: 'farsi-tiny-ava-mana',
+        default: false,
+        localService: true,
+        provider: 'tiny-ava (ONNX Web - 24kHz Offline Neural)',
+        isFarsi: true,
+      },
+      {
+        name: '✨ tiny-ava — مایا (دوزبانه فارسی/انگلیسی)',
+        lang: 'fa-IR',
+        voiceURI: 'farsi-tiny-ava-maya',
+        default: false,
+        localService: true,
+        provider: 'tiny-ava (ONNX Web - 24kHz Bilingual)',
+        isFarsi: true,
+      },
+      {
         name: '🧠 Piper Neural (ONNX Web - امیر fa_IR)',
         lang: 'fa-IR',
         voiceURI: 'farsi-piper-neural',
@@ -1099,7 +1126,13 @@ class SpeechNarrationService {
     }
 
     const isChunkFarsi = isRtlText(chunkText) || detectLanguageFromText(chunkText) === 'fa-IR';
-    const selectedTinyAvaVoice = settings.tinyAvaVoice || farsiOfflineTts.getTinyAvaVoice();
+    const uriVoiceSuffix = settings.speechVoiceURI?.startsWith('farsi-tiny-ava-')
+      ? settings.speechVoiceURI.slice('farsi-tiny-ava-'.length)
+      : undefined;
+    const selectedTinyAvaVoice =
+      uriVoiceSuffix === 'parisa' || uriVoiceSuffix === 'mana' || uriVoiceSuffix === 'maya'
+        ? uriVoiceSuffix
+        : settings.tinyAvaVoice || farsiOfflineTts.getTinyAvaVoice();
 
     const currentWpm = getCurrentWpm ? getCurrentWpm() : settings.wpm;
     const wpmMultiplier = currentWpm / 160;

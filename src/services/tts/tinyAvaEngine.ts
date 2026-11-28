@@ -325,7 +325,7 @@ export class TinyAvaEngine implements TtsEngine {
           }
 
           const cachedFiles = await ensureTinyAvaModelsCached({
-            includeMultiVoice: needsMultiVoice,
+            voice: requestedVoice,
             signal: options.signal,
             cacheStorage: this._testCacheStorageOverride,
             fetchImpl: this._testFetchOverride,
@@ -404,11 +404,37 @@ export class TinyAvaEngine implements TtsEngine {
           };
           return false;
         }
+        const rawMsg = String(err?.message || err || 'ONNX session creation error');
+        const lower = rawMsg.toLowerCase();
+        const isOffline =
+          (typeof navigator !== 'undefined' && navigator.onLine === false) ||
+          lower.includes('failed to fetch') ||
+          lower.includes('networkerror') ||
+          lower.includes('network error') ||
+          lower.includes('offline');
+        const isOom =
+          lower.includes('out of memory') ||
+          lower.includes('oom') ||
+          lower.includes('memory access out of bounds') ||
+          lower.includes('could not allocate');
+        const isWasm =
+          lower.includes('wasm') ||
+          lower.includes('webassembly') ||
+          lower.includes('compile');
+
+        const friendlyMsg = isOffline
+          ? 'offline before first model cache download'
+          : isOom
+            ? 'insufficient memory (WASM OOM) while loading tiny-ava'
+            : isWasm
+              ? `WASM runtime error: ${rawMsg}`
+              : `model initialization failed: ${rawMsg}`;
+
         console.warn('Could not initialize tiny-ava ONNX sessions, fallback available:', err);
         this.releaseSessionsOnly();
         this.lastInitError = {
-          message: `model initialization failed: ${err?.message || 'ONNX session creation error'}`,
-          category: 'INIT_FAILED',
+          message: friendlyMsg,
+          category: isOffline ? 'DOWNLOAD_FAILED' : 'INIT_FAILED',
         };
         return false;
       } finally {

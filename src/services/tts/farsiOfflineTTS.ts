@@ -19,6 +19,7 @@ import {
   PiperCacheInfo,
   TinyAvaCacheInfo,
   TinyAvaVoiceId,
+  FarsiTtsStatusNotice,
   isFarsiTtsEngine,
   isTinyAvaVoice,
   CustomTtsConfig,
@@ -29,7 +30,12 @@ import { piperEngine } from './piperEngine';
 import { tinyAvaEngine } from './tinyAvaEngine';
 import { customTtsEngine } from './customTtsEngine';
 import { indexedDbModelStore } from './indexedDbModelStore';
-import { tinyAvaModelStore } from './tinyAvaModelStore';
+import { tinyAvaModelStore, TINY_AVA_CACHE_VERSION, TINY_AVA_MODEL_ID } from './tinyAvaModelStore';
+import {
+  ensureTinyAvaModelsCached,
+  getTinyAvaCacheSummary,
+  clearTinyAvaModelCache,
+} from './tinyAvaModelCache';
 import { safeStorage } from '../../utils/safeStorage';
 import { loadCustomTtsConfig } from './customTtsConfig';
 import { isRtlText } from '../../utils/textParser';
@@ -43,6 +49,7 @@ export const SAMPLE_FARSI_TEXT = 'این یک آزمایش برای سیستم �
 
 class FarsiOfflineTtsManager {
   private activeEngine: FarsiTtsEngineType = 'espeak';
+  private hasExplicitUserEngineChoice: boolean = false;
   private tinyAvaVoice: TinyAvaVoiceId = 'parisa';
   private currentPlayingId: number = 0;
   private isSpeakingActive: boolean = false;
@@ -51,10 +58,16 @@ class FarsiOfflineTtsManager {
   private hasNotifiedEndForCurrent: boolean = false;
   private activeCallbacks: FarsiTtsOptions | null = null;
   private listeners: Set<() => void> = new Set();
+  private statusNoticeSeq: number = 0;
+  private lastStatusNotice: FarsiTtsStatusNotice | null = null;
+  private statusNoticeListeners: Set<(notice: FarsiTtsStatusNotice | null) => void> = new Set();
 
   constructor() {
     this.loadSavedSettings();
     this.setupExtensionMessageListener();
+    if (typeof window !== 'undefined') {
+      void this.autoPromoteCachedTinyAva();
+    }
   }
 
   public getLifecycleState(): TtsLifecycleState {
@@ -82,6 +95,54 @@ class FarsiOfflineTtsManager {
       (tinyAvaEngine as any).resetForTesting();
     }
     this.tinyAvaVoice = 'parisa';
+    this.activeEngine = 'espeak';
+    this.hasExplicitUserEngineChoice = false;
+    this.lastStatusNotice = null;
+    this.statusNoticeListeners.clear();
+  }
+
+  public emitStatusNotice(
+    notice: Omit<FarsiTtsStatusNotice, 'id' | 'timestamp'>
+  ): FarsiTtsStatusNotice {
+    const entry: FarsiTtsStatusNotice = {
+      ...notice,
+      id: ++this.statusNoticeSeq,
+      timestamp: Date.now(),
+    };
+    this.lastStatusNotice = entry;
+    this.statusNoticeListeners.forEach((cb) => {
+      try {
+        cb(entry);
+      } catch {}
+    });
+    return entry;
+  }
+
+  public clearStatusNotice(): void {
+    this.lastStatusNotice = null;
+    this.statusNoticeListeners.forEach((cb) => {
+      try {
+        cb(null);
+      } catch {}
+    });
+  }
+
+  public getLastStatusNotice(): FarsiTtsStatusNotice | null {
+    return this.lastStatusNotice;
+  }
+
+  public subscribeStatusNotice(
+    cb: (notice: FarsiTtsStatusNotice | null) => void
+  ): () => void {
+    this.statusNoticeListeners.add(cb);
+    if (this.lastStatusNotice) {
+      try {
+        cb(this.lastStatusNotice);
+      } catch {}
+    }
+    return () => {
+      this.statusNoticeListeners.delete(cb);
+    };
   }
 
   public handleStopMessage(): void {
@@ -99,6 +160,7 @@ class FarsiOfflineTtsManager {
             tinyAvaModelStore.reportExternalDownloadProgress({
               file: message.file || 'tiny-ava',
               totalLoadedBytes: message.totalLoadedBytes || 0,
+              totalExpectedBytes: message.totalExpectedBytes || 0,
               percent: message.percent || 0,
               cached: Boolean(message.cached),
             });
@@ -169,6 +231,7 @@ class FarsiOfflineTtsManager {
       const savedEngine = safeStorage.getItem(STORAGE_KEY_ENGINE) as FarsiTtsEngineType | null;
       if (savedEngine && isFarsiTtsEngine(savedEngine)) {
         this.activeEngine = savedEngine;
+        this.hasExplicitUserEngineChoice = true;
       }
 
       const savedVoice = safeStorage.getItem(STORAGE_KEY_TINY_AVA_VOICE);
@@ -183,6 +246,7 @@ class FarsiOfflineTtsManager {
           let changed = false;
           if (res?.farsiTtsEngine && isFarsiTtsEngine(res.farsiTtsEngine)) {
             this.activeEngine = res.farsiTtsEngine;
+            this.hasExplicitUserEngineChoice = true;
             changed = true;
           }
           if (res?.tinyAvaVoice && isTinyAvaVoice(res.tinyAvaVoice)) {
@@ -196,6 +260,37 @@ class FarsiOfflineTtsManager {
     } catch {
       // fallback
     }
+  }
+
+  /**
+   * Promotes tiny-ava to be the default Farsi engine once its models are cached,
+   * provided the user has not explicitly pinned another Farsi engine.
+   */
+  public async autoPromoteCachedTinyAva(cacheStorage?: CacheStorage): Promise<boolean> {
+    if (this.hasExplicitUserEngineChoice) {
+      return false;
+    }
+    try {
+      const summary = await getTinyAvaCacheSummary(cacheStorage);
+      if (summary.isParisaReady || summary.isMultiVoiceReady) {
+        if (!this.hasExplicitUserEngineChoice && this.activeEngine !== 'tiny-ava') {
+          this.activeEngine = 'tiny-ava';
+          this.notify();
+        }
+        return true;
+      }
+      const idbInfo = await tinyAvaModelStore.checkCache();
+      if (idbInfo.isOfflineReady) {
+        if (!this.hasExplicitUserEngineChoice && this.activeEngine !== 'tiny-ava') {
+          this.activeEngine = 'tiny-ava';
+          this.notify();
+        }
+        return true;
+      }
+    } catch {
+      // keep default engine
+    }
+    return false;
   }
 
   public subscribe(cb: () => void): () => void {
@@ -229,6 +324,7 @@ class FarsiOfflineTtsManager {
 
   public setEngine(engine: FarsiTtsEngineType): void {
     this.activeEngine = engine;
+    this.hasExplicitUserEngineChoice = true;
     safeStorage.setItem(STORAGE_KEY_ENGINE, engine);
 
     if (typeof chrome !== 'undefined' && chrome.storage?.local) {
@@ -343,9 +439,55 @@ class FarsiOfflineTtsManager {
         return tinyAvaResult;
       }
 
-      const reason = tinyAvaResult.error || 'tiny-ava neural model not ready in IndexedDB';
+      const reason = tinyAvaResult.error || 'tiny-ava neural model not ready';
+
+      // Graceful fallback chain: try Piper Neural first if ready/cached, then eSpeak NG
+      let piperReady = piperEngine.isModelReady();
+      if (!piperReady) {
+        try {
+          const piperCache = await indexedDbModelStore.checkCache();
+          piperReady = piperCache.isOfflineReady;
+        } catch {
+          piperReady = false;
+        }
+      }
+
+      if (piperReady) {
+        console.warn(`[FarsiOfflineTtsManager] tiny-ava failed (${reason}). Falling back to Piper Neural.`);
+        const piperFallback = await piperEngine.synthesize(text, {
+          ...options,
+          engine: 'piper',
+          allowFallback: false,
+        });
+        if (piperFallback.success) {
+          const noticeMsg = `tiny-ava unavailable (${reason}) — switched to Piper Neural fallback.`;
+          this.emitStatusNotice({
+            severity: 'warning',
+            message: noticeMsg,
+            requestedEngine: 'tiny-ava',
+            fallbackEngine: 'piper',
+            reason,
+          });
+          options.onFallback?.(noticeMsg);
+          return {
+            ...piperFallback,
+            engineUsed: 'piper',
+            fallbackTriggered: true,
+            fallbackReason: noticeMsg,
+          };
+        }
+      }
+
       console.warn(`[FarsiOfflineTtsManager] tiny-ava failed (${reason}). Explicitly falling back to eSpeak NG WASM.`);
-      options.onFallback?.(reason);
+      const espeakNoticeMsg = `tiny-ava unavailable (${reason}) — switched to eSpeak NG fallback.`;
+      this.emitStatusNotice({
+        severity: 'warning',
+        message: espeakNoticeMsg,
+        requestedEngine: 'tiny-ava',
+        fallbackEngine: 'espeak',
+        reason,
+      });
+      options.onFallback?.(espeakNoticeMsg);
 
       const fallbackResult = await espeakEngine.synthesize(text, options);
       if (!fallbackResult.success) {
@@ -353,7 +495,7 @@ class FarsiOfflineTtsManager {
           ...fallbackResult,
           engineUsed: 'espeak',
           fallbackTriggered: true,
-          fallbackReason: reason,
+          fallbackReason: espeakNoticeMsg,
           error: `Both tiny-ava and eSpeak fallback failed: (tiny-ava: ${reason}) (eSpeak: ${fallbackResult.error || 'unknown'})`,
         };
       }
@@ -361,7 +503,7 @@ class FarsiOfflineTtsManager {
         ...fallbackResult,
         engineUsed: 'espeak',
         fallbackTriggered: true,
-        fallbackReason: reason,
+        fallbackReason: espeakNoticeMsg,
       };
     } else if (engineType === 'custom') {
       // User's own endpoint. Fall back to eSpeak only if text is Farsi and fallback is permitted.
@@ -438,6 +580,13 @@ class FarsiOfflineTtsManager {
           // onStart is delivered by the STATUS_CHANGED (STARTED/PLAYING) event, not here,
           // to avoid firing twice and to carry the synthesized duration.
           if (res.fallbackTriggered && res.fallbackReason) {
+            this.emitStatusNotice({
+              severity: 'warning',
+              message: res.fallbackReason,
+              requestedEngine: engineType,
+              fallbackEngine: res.engineUsed,
+              reason: res.fallbackReason,
+            });
             options.onFallback?.(res.fallbackReason);
           }
           return;
@@ -613,28 +762,152 @@ class FarsiOfflineTtsManager {
   }
 
   /**
-   * IndexedDB Model Management for tiny-ava v2 (Parisa / Mana / Maya)
+   * Cache API (`tiny-ava-models-v1`) + IndexedDB Model Management for tiny-ava (Parisa / Mana / Maya)
    */
-  public async getTinyAvaCacheInfo(): Promise<TinyAvaCacheInfo> {
-    return tinyAvaModelStore.checkCache();
+  public async getTinyAvaCacheInfo(cacheStorage?: CacheStorage): Promise<TinyAvaCacheInfo> {
+    const idbInfo = await tinyAvaModelStore.checkCache();
+    if (idbInfo.status === 'downloading') {
+      return idbInfo;
+    }
+
+    const summary = await getTinyAvaCacheSummary(cacheStorage);
+    if (summary.isParisaReady || summary.isMultiVoiceReady) {
+      return {
+        status: 'ready',
+        modelName: summary.isMultiVoiceReady ? 'tiny-ava-v2' : 'tiny-ava-parisa',
+        sizeBytes: summary.totalBytes,
+        loadedBytes: summary.totalBytes,
+        totalBytes: summary.totalBytes,
+        cachedVoices: summary.cachedVoices,
+        downloadProgress: 100,
+        cacheVersion: TINY_AVA_CACHE_VERSION,
+        isOfflineReady: true,
+      };
+    }
+
+    if (idbInfo.isOfflineReady) {
+      return {
+        ...idbInfo,
+        loadedBytes: idbInfo.sizeBytes,
+        totalBytes: idbInfo.sizeBytes,
+        cachedVoices: ['parisa', 'mana', 'maya'],
+      };
+    }
+
+    return {
+      ...idbInfo,
+      cachedVoices: [],
+    };
   }
 
   public subscribeTinyAvaCache(cb: (info: TinyAvaCacheInfo) => void): () => void {
-    return tinyAvaModelStore.subscribe(cb);
+    const unsubStore = tinyAvaModelStore.subscribe((info) => {
+      if (info.status === 'downloading' || info.isOfflineReady) {
+        cb(info);
+      } else {
+        this.getTinyAvaCacheInfo().then(cb).catch(() => cb(info));
+      }
+    });
+    this.getTinyAvaCacheInfo().then(cb).catch(() => {});
+    return unsubStore;
   }
 
-  public async downloadTinyAvaModel(onProgress?: (pct: number) => void): Promise<boolean> {
+  public async downloadTinyAvaModel(
+    onProgress?: (pct: number) => void,
+    voice?: TinyAvaVoiceId,
+    options?: { cacheStorage?: CacheStorage; fetchImpl?: typeof fetch }
+  ): Promise<boolean> {
+    const targetVoice: TinyAvaVoiceId = voice || this.tinyAvaVoice || 'parisa';
+    const hasCacheApi = Boolean(
+      options?.cacheStorage || (typeof caches !== 'undefined' && typeof caches.open === 'function')
+    );
+
+    if (hasCacheApi) {
+      try {
+        await ensureTinyAvaModelsCached({
+          voice: targetVoice,
+          cacheStorage: options?.cacheStorage,
+          fetchImpl: options?.fetchImpl,
+          onProgress: (p) => {
+            onProgress?.(p.percent);
+            tinyAvaModelStore.reportExternalDownloadProgress({
+              file: p.file,
+              totalLoadedBytes: p.totalLoadedBytes,
+              totalExpectedBytes: p.totalExpectedBytes,
+              percent: Math.min(99, p.percent),
+              cached: p.cached,
+            });
+          },
+        });
+
+        const summary = await getTinyAvaCacheSummary(options?.cacheStorage);
+        tinyAvaModelStore.reportExternalDownloadProgress({
+          file: targetVoice === 'parisa' ? 'tiny-ava-parisa.onnx' : 'tiny-ava-v2.onnx',
+          totalLoadedBytes: summary.totalBytes,
+          totalExpectedBytes: summary.totalBytes,
+          percent: 100,
+          cachedVoices: summary.cachedVoices,
+          cached: false,
+        });
+        onProgress?.(100);
+
+        // Warm up ONNX sessions in browser environments without failing download if ORT isn't present in headless tests
+        if (!options?.cacheStorage) {
+          await tinyAvaEngine.init({ voice: targetVoice }).catch(() => false);
+        }
+
+        if (!this.hasExplicitUserEngineChoice) {
+          this.activeEngine = 'tiny-ava';
+        }
+        this.notify();
+        return true;
+      } catch (err: any) {
+        const msg = err?.message || 'tiny-ava model download failed';
+        tinyAvaModelStore.reportExternalCacheState({
+          status: 'error',
+          modelName: TINY_AVA_MODEL_ID,
+          sizeBytes: 0,
+          downloadProgress: 0,
+          errorMessage: msg,
+          errorCategory: 'DOWNLOAD_FAILED',
+          isOfflineReady: false,
+        });
+        this.notify();
+        return false;
+      }
+    }
+
     const success = await tinyAvaModelStore.downloadAndCacheModel(onProgress);
     if (success) {
-      await tinyAvaEngine.init();
+      await tinyAvaEngine.init({ voice: targetVoice }).catch(() => false);
+      if (!this.hasExplicitUserEngineChoice) {
+        this.activeEngine = 'tiny-ava';
+      }
       this.notify();
     }
     return success;
   }
 
-  public async clearTinyAvaCache(): Promise<void> {
+  public async clearTinyAvaCache(cacheStorage?: CacheStorage): Promise<void> {
     tinyAvaEngine.dispose();
+    await clearTinyAvaModelCache(cacheStorage);
     await tinyAvaModelStore.clearCache();
+    if (this.isExtensionContext() && !this.isOffscreenDocumentContext()) {
+      await this.sendExtensionMessage({
+        action: 'CLEAR_TINY_AVA_CACHE',
+        type: 'CLEAR_TINY_AVA_CACHE',
+      }).catch(() => {});
+    }
+    tinyAvaModelStore.reportExternalCacheState({
+      status: 'not_cached',
+      modelName: TINY_AVA_MODEL_ID,
+      sizeBytes: 0,
+      loadedBytes: 0,
+      totalBytes: 0,
+      cachedVoices: [],
+      downloadProgress: 0,
+      isOfflineReady: false,
+    });
     this.notify();
   }
 

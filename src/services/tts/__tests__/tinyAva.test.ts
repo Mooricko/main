@@ -599,4 +599,199 @@ test('Phase 3: TinyAvaEngine lazy-loads 3 ORT sessions from Cache API, streams 2
   engine.resetForTesting();
 });
 
+test('Phase 4: voice-scoped lazy download (~29 MB Parisa only, lazy v2 ONNX on Mana/Maya), auto-promotion, and cache clearing', async () => {
+  const {
+    TINY_AVA_PARISA_TOTAL_BYTES,
+    getTinyAvaCacheSummary,
+    getTinyAvaAssetManifest,
+  } = await import('../tinyAvaModelCache');
+
+  // ~29 MB for G2P + Parisa (28.7 MB)
+  const parisaMb = TINY_AVA_PARISA_TOTAL_BYTES / (1024 * 1024);
+  assert.ok(parisaMb > 28 && parisaMb < 30, `expected ~29 MB for G2P+Parisa, got ${parisaMb.toFixed(1)} MB`);
+
+  const parisaManifest = getTinyAvaAssetManifest({ voice: 'parisa' });
+  assert.deepEqual(
+    parisaManifest.map((a) => a.name),
+    ['g2p_encoder.onnx', 'g2p_decoder.onnx', 'tiny-ava-parisa.onnx', 'tiny-ava-parisa.json']
+  );
+
+  const manaManifest = getTinyAvaAssetManifest({ voice: 'mana' });
+  assert.deepEqual(
+    manaManifest.map((a) => a.name),
+    ['g2p_encoder.onnx', 'g2p_decoder.onnx', 'tiny-ava-v2.onnx', 'tiny-ava-v2.json', 'lexicon_en.tsv']
+  );
+
+  // Mock CacheStorage + fetch to verify lazy download behavior
+  const buckets = new Map<string, Map<string, Response>>();
+  const mockCacheStorage = {
+    async open(name: string) {
+      if (!buckets.has(name)) buckets.set(name, new Map());
+      const store = buckets.get(name)!;
+      return {
+        async match(req: RequestInfo | URL) {
+          const hit = store.get(String(req));
+          return hit ? hit.clone() : undefined;
+        },
+        async put(req: RequestInfo | URL, res: Response) {
+          store.set(String(req), res.clone());
+        },
+        async delete(req: RequestInfo | URL) {
+          return store.delete(String(req));
+        },
+      };
+    },
+    async delete(name: string) {
+      return buckets.delete(name);
+    },
+  } as unknown as CacheStorage;
+
+  const fetchedUrls: string[] = [];
+  const mockFetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    fetchedUrls.push(url);
+    const body = url.endsWith('.json')
+      ? new TextEncoder().encode(JSON.stringify({ symbols: ['_'], sample_rate: 24000, voices: ['parisa', 'mana', 'maya'], padding: 'x'.repeat(120) }))
+      : url.endsWith('.tsv')
+        ? new TextEncoder().encode('hello\thəˈloʊ\n'.repeat(1500))
+        : new Uint8Array(120_000).fill(5);
+    return new Response(body, { status: 200, headers: { 'Content-Length': String(body.byteLength) } });
+  }) as typeof fetch;
+
+  farsiOfflineTts.resetForTesting();
+  assert.equal(farsiOfflineTts.getActiveEngine(), 'espeak');
+
+  // 1. Downloading Parisa fetches ONLY the 4 Parisa/G2P files and auto-promotes tiny-ava as default
+  const okParisa = await farsiOfflineTts.downloadTinyAvaModel(undefined, 'parisa', {
+    cacheStorage: mockCacheStorage,
+    fetchImpl: mockFetch,
+  });
+  assert.equal(okParisa, true);
+  assert.equal(fetchedUrls.length, 4);
+  assert.ok(!fetchedUrls.some((u) => u.includes('tiny-ava-v2.onnx')), 'Parisa download must not fetch v2 ONNX');
+  assert.equal(farsiOfflineTts.getActiveEngine(), 'tiny-ava', 'auto-promotes tiny-ava once cached when no explicit user choice exists');
+
+  const summaryAfterParisa = await getTinyAvaCacheSummary(mockCacheStorage);
+  assert.equal(summaryAfterParisa.isParisaReady, true);
+  assert.equal(summaryAfterParisa.isMultiVoiceReady, false);
+  assert.deepEqual(summaryAfterParisa.cachedVoices, ['parisa']);
+
+  // 2. Selecting/downloading Mana lazy-downloads ONLY v2 + lexicon (reusing cached G2P)
+  fetchedUrls.length = 0;
+  const okMana = await farsiOfflineTts.downloadTinyAvaModel(undefined, 'mana', {
+    cacheStorage: mockCacheStorage,
+    fetchImpl: mockFetch,
+  });
+  assert.equal(okMana, true);
+  assert.equal(fetchedUrls.length, 3, 'G2P encoder/decoder hit Cache API; only v2 onnx/json + lexicon fetched');
+  assert.ok(fetchedUrls.some((u) => u.includes('tiny-ava-v2.onnx')));
+
+  const summaryAfterMana = await getTinyAvaCacheSummary(mockCacheStorage);
+  assert.equal(summaryAfterMana.isMultiVoiceReady, true);
+  assert.deepEqual(summaryAfterMana.cachedVoices, ['parisa', 'mana', 'maya']);
+
+  // 3. Explicit user choice is respected by autoPromoteCachedTinyAva()
+  farsiOfflineTts.setEngine('espeak');
+  const promoted = await farsiOfflineTts.autoPromoteCachedTinyAva(mockCacheStorage);
+  assert.equal(promoted, false);
+  assert.equal(farsiOfflineTts.getActiveEngine(), 'espeak');
+
+  // 4. clearTinyAvaCache clears Cache API & resets cache summary
+  await farsiOfflineTts.clearTinyAvaCache(mockCacheStorage);
+  const summaryAfterClear = await getTinyAvaCacheSummary(mockCacheStorage);
+  assert.equal(summaryAfterClear.isParisaReady, false);
+  assert.equal(summaryAfterClear.totalBytes, 0);
+  farsiOfflineTts.resetForTesting();
+});
+
+test('Phase 4: tiny-ava failure falls back to Piper first (if ready), then eSpeak NG, emitting non-blocking status notices', async () => {
+  const { tinyAvaEngine } = await import('../tinyAvaEngine');
+  const { piperEngine } = await import('../piperEngine');
+  const { espeakEngine } = await import('../espeakEngine');
+  const { encodePcmWav } = await import('../audioUtils');
+
+  farsiOfflineTts.resetForTesting();
+  tinyAvaEngine.resetForTesting();
+
+  const receivedNotices: string[] = [];
+  const unsub = farsiOfflineTts.subscribeStatusNotice((n) => {
+    if (n?.message) receivedNotices.push(n.message);
+  });
+
+  // Case A: Piper ready -> tiny-ava failure falls back to Piper cleanly
+  const origIsPiperReady = piperEngine.isModelReady.bind(piperEngine);
+  const origPiperSynth = piperEngine.synthesize.bind(piperEngine);
+  const origEspeakSynth = espeakEngine.synthesize.bind(espeakEngine);
+  let espeakCalled = false;
+
+  (piperEngine as any).isModelReady = () => true;
+  (piperEngine as any).synthesize = async () => ({
+    success: true,
+    wavBlob: encodePcmWav(new Float32Array(2205), 22050),
+    durationMs: 100,
+    sampleRate: 22050,
+    engineUsed: 'piper' as const,
+  });
+  (espeakEngine as any).synthesize = async () => {
+    espeakCalled = true;
+    return {
+      success: true,
+      wavBlob: encodePcmWav(new Float32Array(2205), 22050),
+      durationMs: 100,
+      sampleRate: 22050,
+      engineUsed: 'espeak' as const,
+    };
+  };
+
+  try {
+    const resPiper = await farsiOfflineTts.synthesize('سلام', { engine: 'tiny-ava', allowFallback: true });
+    assert.equal(resPiper.success, true);
+    assert.equal(resPiper.engineUsed, 'piper');
+    assert.equal(resPiper.fallbackTriggered, true);
+    assert.equal(espeakCalled, false, 'must prefer Piper before eSpeak when Piper is ready');
+    assert.ok(receivedNotices.some((m) => m.includes('Piper')), 'emits non-blocking Piper fallback notice');
+
+    // Case B: Piper unavailable -> tiny-ava failure falls back to eSpeak NG
+    (piperEngine as any).isModelReady = () => false;
+    const resEspeak = await farsiOfflineTts.synthesize('سلام', { engine: 'tiny-ava', allowFallback: true });
+    assert.equal(resEspeak.success, true);
+    assert.equal(resEspeak.engineUsed, 'espeak');
+    assert.equal(resEspeak.fallbackTriggered, true);
+    assert.equal(espeakCalled, true);
+    assert.ok(receivedNotices.some((m) => m.includes('eSpeak')), 'emits non-blocking eSpeak fallback notice');
+  } finally {
+    (piperEngine as any).isModelReady = origIsPiperReady;
+    (piperEngine as any).synthesize = origPiperSynth;
+    (espeakEngine as any).synthesize = origEspeakSynth;
+    unsub();
+    farsiOfflineTts.resetForTesting();
+  }
+});
+
+test('Phase 4: SettingsDrawer and ExtensionHubModal include Clear cached models button and CC BY 4.0 attribution link', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+
+  const settingsSrc = fs.readFileSync(path.resolve(process.cwd(), 'src/components/SettingsDrawer.tsx'), 'utf8');
+  const hubSrc = fs.readFileSync(path.resolve(process.cwd(), 'src/components/ExtensionHubModal.tsx'), 'utf8');
+
+  for (const [name, src] of [
+    ['SettingsDrawer.tsx', settingsSrc],
+    ['ExtensionHubModal.tsx', hubSrc],
+  ]) {
+    assert.ok(src.includes('Clear cached models'), `${name} must include "Clear cached models" button`);
+    assert.ok(src.includes('~29 MB') || src.includes('~29MB'), `${name} must display ~29 MB download indicator`);
+    assert.ok(
+      src.includes('tiny-ava (Mehdi Allahyari / OncillaAI)'),
+      `${name} must include required attribution text`
+    );
+    assert.ok(
+      src.includes('https://huggingface.co/mehdi-hf/tiny-ava'),
+      `${name} must link attribution to https://huggingface.co/mehdi-hf/tiny-ava`
+    );
+    assert.ok(src.includes('CC BY 4.0'), `${name} must include CC BY 4.0 license attribution`);
+  }
+});
+
+
 

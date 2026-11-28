@@ -131,8 +131,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   const action = message.action || message.type;
 
-  // Broadcast STATUS_CHANGED events from offscreen to all open tabs & popup views
-  if (action === 'STATUS_CHANGED') {
+  // Broadcast STATUS_CHANGED and DOWNLOAD_PROGRESS events from offscreen to all open tabs & popup views
+  if (action === 'STATUS_CHANGED' || action === 'DOWNLOAD_PROGRESS') {
     try {
       chrome.tabs.query({}, (tabs) => {
         for (const tab of tabs) {

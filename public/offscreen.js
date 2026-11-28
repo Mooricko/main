@@ -307,7 +307,7 @@
                 broadcastStatus('ERROR', playbackId, streamErr?.message || 'tiny-ava playback error', totalDurationMs, 'tiny-ava');
                 return;
               }
-              // Fall back cleanly to manager.synthesize (which handles eSpeak fallback if allowFallback=true)
+              // Fall back cleanly: Piper Neural (if cached) -> eSpeak NG
               if (!allowFallback) {
                 currentLifecycleState = 'ERROR';
                 isCurrentlySpeaking = false;
@@ -316,46 +316,74 @@
                 sendResponse({ success: false, playbackStarted: false, engineUsed: 'tiny-ava', error: errMsg, playbackId });
                 return;
               }
-              manager.synthesize(text, { engine: 'espeak', speed, pitch, volume, allowFallback: false, playbackId })
-                .then(async (res) => {
-                  if (currentPlaybackId !== playbackId) return;
-                  if (!res.success || !res.wavBlob || !audioEl) {
-                    const errMsg = res.error || 'Fallback synthesis failed';
-                    broadcastStatus('ERROR', playbackId, errMsg, 0, 'espeak');
-                    sendResponse({ success: false, playbackStarted: false, engineUsed: 'espeak', error: errMsg, playbackId });
-                    return;
+
+              const failReason = streamErr?.message || 'tiny-ava initialization failed';
+              let fallbackEngine = 'espeak';
+              let fallbackRes = null;
+
+              try {
+                let piperCached = Boolean(window.piperEngine && typeof window.piperEngine.isModelReady === 'function' && window.piperEngine.isModelReady());
+                if (!piperCached && window.indexedDbModelStore && typeof window.indexedDbModelStore.checkCache === 'function') {
+                  const pInfo = await window.indexedDbModelStore.checkCache();
+                  piperCached = Boolean(pInfo && pInfo.isOfflineReady);
+                }
+                if (piperCached) {
+                  const pRes = await manager.synthesize(text, { engine: 'piper', speed, pitch, volume, allowFallback: false, playbackId });
+                  if (pRes && pRes.success && pRes.wavBlob) {
+                    fallbackEngine = 'piper';
+                    fallbackRes = pRes;
                   }
-                  currentAudioUrl = URL.createObjectURL(res.wavBlob);
-                  audioEl.src = currentAudioUrl;
-                  audioEl.volume = Math.max(0, Math.min(1, volume));
-                  audioEl.onplay = () => {
-                    if (currentPlaybackId === playbackId) {
-                      broadcastStatus('PLAYING', playbackId, undefined, res.durationMs, 'espeak');
-                    }
-                  };
-                  audioEl.onended = () => {
-                    if (currentPlaybackId === playbackId) {
-                      broadcastStatus('ENDED', playbackId, undefined, res.durationMs, 'espeak');
-                      stopLocalAudioResources();
-                    }
-                  };
-                  await audioEl.play();
-                  sendResponse({
-                    success: true,
-                    playbackStarted: true,
-                    engineUsed: 'espeak',
-                    durationMs: res.durationMs,
-                    playbackId,
-                    fallbackTriggered: true,
-                    fallbackReason: streamErr?.message || 'tiny-ava fallback to eSpeak NG',
-                  });
-                })
-                .catch((fbErr) => {
+                }
+              } catch {}
+
+              if (!fallbackRes) {
+                fallbackEngine = 'espeak';
+                fallbackRes = await manager.synthesize(text, { engine: 'espeak', speed, pitch, volume, allowFallback: false, playbackId });
+              }
+
+              if (currentPlaybackId !== playbackId) return;
+              if (!fallbackRes || !fallbackRes.success || !fallbackRes.wavBlob || !audioEl) {
+                const errMsg = fallbackRes?.error || 'Fallback synthesis failed';
+                broadcastStatus('ERROR', playbackId, errMsg, 0, fallbackEngine);
+                sendResponse({ success: false, playbackStarted: false, engineUsed: fallbackEngine, error: errMsg, playbackId });
+                return;
+              }
+
+              const fallbackNotice = fallbackEngine === 'piper'
+                ? `tiny-ava unavailable (${failReason}) — switched to Piper Neural fallback.`
+                : `tiny-ava unavailable (${failReason}) — switched to eSpeak NG fallback.`;
+
+              try {
+                currentAudioUrl = URL.createObjectURL(fallbackRes.wavBlob);
+                audioEl.src = currentAudioUrl;
+                audioEl.volume = Math.max(0, Math.min(1, volume));
+                audioEl.onplay = () => {
                   if (currentPlaybackId === playbackId) {
-                    broadcastStatus('ERROR', playbackId, fbErr?.message || 'Fallback failed', 0, 'espeak');
+                    broadcastStatus('PLAYING', playbackId, undefined, fallbackRes.durationMs, fallbackEngine);
                   }
-                  sendResponse({ success: false, playbackStarted: false, error: fbErr?.message || 'Fallback failed', playbackId });
+                };
+                audioEl.onended = () => {
+                  if (currentPlaybackId === playbackId) {
+                    broadcastStatus('ENDED', playbackId, undefined, fallbackRes.durationMs, fallbackEngine);
+                    stopLocalAudioResources();
+                  }
+                };
+                await audioEl.play();
+                sendResponse({
+                  success: true,
+                  playbackStarted: true,
+                  engineUsed: fallbackEngine,
+                  durationMs: fallbackRes.durationMs,
+                  playbackId,
+                  fallbackTriggered: true,
+                  fallbackReason: fallbackNotice,
                 });
+              } catch (fbErr) {
+                if (currentPlaybackId === playbackId) {
+                  broadcastStatus('ERROR', playbackId, fbErr?.message || 'Fallback failed', 0, fallbackEngine);
+                }
+                sendResponse({ success: false, playbackStarted: false, error: fbErr?.message || 'Fallback failed', playbackId });
+              }
             }
           })();
           return true;
@@ -545,7 +573,7 @@
           sendResponse({ success: false, error: 'TTS manager not ready' });
           return false;
         }
-        manager.downloadTinyAvaModel()
+        manager.downloadTinyAvaModel(undefined, message.voice)
           .then((ok) => sendResponse({ success: ok, error: ok ? undefined : 'tiny-ava model download failed' }))
           .catch((err) => sendResponse({ success: false, error: err?.message || 'tiny-ava model download failed' }));
         return true; // async
